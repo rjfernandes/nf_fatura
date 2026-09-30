@@ -1,0 +1,13 @@
+node_modules
+dist
+.env
+*.pfx
+*.crt
+*.key
+*.db
+*.db-journal
+certs/
+
+server/src/generated/
+
+server/exports/

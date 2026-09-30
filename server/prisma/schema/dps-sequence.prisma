@@ -1,0 +1,5 @@
+// Allocates a unique, sequential nDPS per billing (never reused, even on retry).
+model DpsSequence {
+  id        Int    @id @default(autoincrement())
+  billingId String @unique
+}

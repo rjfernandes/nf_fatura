@@ -1,0 +1,22 @@
+{
+  "name": "nf-fatura",
+  "private": true,
+  "workspaces": [
+    "server",
+    "web"
+  ],
+  "scripts": {
+    "dev": "npm-run-all --parallel dev:server dev:web",
+    "dev:server": "npm run dev -w server",
+    "dev:web": "npm run dev -w web",
+    "test": "npm test -w server",
+    "format": "prettier --write \"{server,web}/**/*.{ts,tsx,mts,css,html,json}\" --ignore-path .gitignore",
+    "lint": "eslint \"{server,web}/**/*.{ts,tsx,mts}\""
+  },
+  "devDependencies": {
+    "@typescript-eslint/parser": "^8.71.0",
+    "eslint": "^10.11.0",
+    "npm-run-all": "^4.1.5",
+    "prettier": "^3.9.9"
+  }
+}

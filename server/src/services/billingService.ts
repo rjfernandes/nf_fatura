@@ -1,0 +1,172 @@
+import type { PrismaClient } from "../generated/prisma/client.js";
+import type { NfseProvider, SlipProvider } from "../integrations/types.js";
+
+/**
+ * AUTO follows each customer's registration: NFS-e always, boleto only if
+ * hasBankSlip.
+ */
+export type BillingMode = "AUTO" | "NFSE" | "SLIP" | "BOTH";
+
+export interface BillingInput {
+  customerIds: string[];
+  competence: string;
+  dueDate: string;
+  mode?: BillingMode;
+}
+
+function resolveMode(mode: BillingMode, hasBankSlip: boolean) {
+  switch (mode) {
+    case "NFSE":
+      return { issueNfse: true, issueSlip: false };
+    case "SLIP":
+      return { issueNfse: false, issueSlip: true };
+    case "BOTH":
+      return { issueNfse: true, issueSlip: true };
+    default:
+      return { issueNfse: true, issueSlip: hasBankSlip };
+  }
+}
+
+const msg = (e: unknown) => (e instanceof Error ? e.message : String(e));
+
+export class BillingService {
+  constructor(
+    private db: PrismaClient,
+    private nfse: NfseProvider,
+    private slip: SlipProvider,
+  ) {}
+
+  /** Creates one Billing per customer and processes each independently. */
+  async run(input: BillingInput) {
+    const customers = await this.db.customer.findMany({
+      where: { id: { in: input.customerIds } },
+    });
+    const billings = [];
+    for (const c of customers) {
+      const b = await this.db.billing.create({
+        data: {
+          customerId: c.id,
+          competence: input.competence,
+          amountCents: c.recurringValue,
+          dueDate: input.dueDate,
+          ...resolveMode(input.mode ?? "AUTO", c.hasBankSlip),
+        },
+      });
+      billings.push(b.id);
+    }
+    // Sequential to respect API rate limits and keep ordering predictable.
+    for (const id of billings) {
+      await this.process(id);
+    }
+    return this.db.billing.findMany({
+      where: { id: { in: billings } },
+      include: {
+        customer: true,
+        invoice: { select: { number: true, accessKey: true } },
+        bankSlip: { select: { linhaDigitavel: true, status: true } },
+      },
+    });
+  }
+
+  /**
+   * Cancels the boleto at the bank and then drops it locally. The bank goes
+   * first: if it refuses (already paid, for instance) nothing changes here.
+   * Without an NFS-e the billing has nothing left, so it leaves the history
+   * too; with one, the billing stays (an issued NFS-e must not vanish) and
+   * issueSlip is cleared so a retry won't recreate the boleto.
+   */
+  async cancelSlip(billingId: string): Promise<{ billingRemoved: boolean }> {
+    const b = await this.db.billing.findUniqueOrThrow({
+      where: { id: billingId },
+      include: { bankSlip: true, invoice: { select: { id: true } } },
+    });
+    if (!b.bankSlip) {
+      throw new Error("Boleto não encontrado");
+    }
+    await this.slip.cancel(
+      b.bankSlip.codigoSolicitacao,
+      "Cancelado pelo emissor",
+    );
+    if (b.invoice) {
+      await this.db.$transaction([
+        this.db.bankSlip.delete({ where: { billingId } }),
+        this.db.billing.update({
+          where: { id: billingId },
+          data: { issueSlip: false },
+        }),
+      ]);
+      return { billingRemoved: false };
+    }
+    await this.db.$transaction([
+      this.db.bankSlip.delete({ where: { billingId } }),
+      this.db.billing.delete({ where: { id: billingId } }),
+    ]);
+    return { billingRemoved: true };
+  }
+
+  /** Resumes from the failed step; safe to call on FAILED billings. */
+  async process(billingId: string) {
+    const b = await this.db.billing.findUniqueOrThrow({
+      where: { id: billingId },
+      include: { customer: true, invoice: true, bankSlip: true },
+    });
+    try {
+      if (b.issueNfse && !b.invoice) {
+        const seq = await this.db.dpsSequence.upsert({
+          where: { billingId: b.id },
+          create: { billingId: b.id },
+          update: {},
+        });
+        const r = await this.nfse.issue({
+          billingId: b.id,
+          dpsNumber: seq.id,
+          customer: b.customer,
+          amountCents: b.amountCents,
+          competence: b.competence,
+        });
+        await this.db.invoice.create({
+          data: {
+            billingId: b.id,
+            number: r.number,
+            accessKey: r.accessKey,
+            xml: r.xml,
+            pdf: r.pdf ? new Uint8Array(r.pdf) : undefined,
+            raw: r.raw,
+          },
+        });
+        await this.db.billing.update({
+          where: { id: b.id },
+          data: { status: "NFSE_ISSUED", error: null },
+        });
+      }
+      if (b.issueSlip && !b.bankSlip) {
+        const s = await this.slip.create({
+          billingId: b.id,
+          customer: b.customer,
+          amountCents: b.amountCents,
+          dueDate: b.dueDate,
+        });
+        await this.db.bankSlip.create({
+          data: {
+            billingId: b.id,
+            codigoSolicitacao: s.codigoSolicitacao,
+            nossoNumero: s.nossoNumero,
+            linhaDigitavel: s.linhaDigitavel,
+            barcode: s.barcode,
+            pdf: s.pdf ? new Uint8Array(s.pdf) : undefined,
+            status: s.status,
+          },
+        });
+      }
+      await this.db.billing.update({
+        where: { id: b.id },
+        data: { status: "COMPLETED", error: null },
+      });
+    } catch (e) {
+      await this.db.billing.update({
+        where: { id: b.id },
+        data: { status: "FAILED", error: msg(e) },
+      });
+    }
+  }
+}

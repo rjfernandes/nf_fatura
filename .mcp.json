@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "nf-fatura-extrato": {
+      "command": "npx",
+      "args": ["tsx", "server/src/mcp/index.ts"]
+    }
+  }
+}

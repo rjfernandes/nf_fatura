@@ -1,0 +1,18 @@
+model Customer {
+  id                String    @id @default(cuid())
+  name              String
+  cnpj              String    @unique
+  address           String
+  addressNumber     String
+  addressComplement String?
+  neighborhood      String
+  city              String
+  cityIbgeCode      String?
+  state             String
+  zipcode           String
+  recurringValue    Int // cents
+  hasBankSlip       Boolean   @default(false)
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+  billings          Billing[]
+}

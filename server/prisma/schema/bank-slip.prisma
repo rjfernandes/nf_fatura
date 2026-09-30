@@ -1,0 +1,11 @@
+model BankSlip {
+  id                String  @id @default(cuid())
+  billingId         String  @unique
+  billing           Billing @relation(fields: [billingId], references: [id])
+  codigoSolicitacao String
+  nossoNumero       String?
+  linhaDigitavel    String?
+  barcode           String?
+  pdf               Bytes?
+  status            String?
+}

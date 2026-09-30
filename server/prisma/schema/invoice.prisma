@@ -1,0 +1,10 @@
+model Invoice {
+  id        String  @id @default(cuid())
+  billingId String  @unique
+  billing   Billing @relation(fields: [billingId], references: [id])
+  number    String?
+  accessKey String?
+  xml       String?
+  pdf       Bytes?
+  raw       String?
+}
