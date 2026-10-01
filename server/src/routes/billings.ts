@@ -1,3 +1,4 @@
+import { renderDanfse } from "../integrations/nfse/danfse.js";
 import type { FastifyPluginAsyncZod } from "fastify-type-provider-zod";
 import { z } from "zod";
 import { prisma } from "../db.js";
@@ -33,7 +34,11 @@ export const billingRoutes =
       const withPdf = await prisma.invoice.findMany({
         where: {
           billingId: { in: billings.map((b) => b.id) },
-          pdf: { not: null },
+          OR: [
+            { pdf: { not: null } },
+            // Issued here: the DANFSe is rendered from the stored XML.
+            { source: "API", xml: { not: null } },
+          ],
         },
         select: { billingId: true },
       });
@@ -175,13 +180,11 @@ export const billingRoutes =
       "/billings/:id/nfse.pdf",
       { schema: { params: idParam } },
       async (req, reply) => {
-        const inv = await prisma.invoice.findUnique({
-          where: { billingId: req.params.id },
-        });
-        if (!inv?.pdf) {
+        const pdf = await service.nfsePdf(req.params.id);
+        if (!pdf) {
           return reply.code(404).send({ message: "PDF não disponível" });
         }
-        return reply.type("application/pdf").send(Buffer.from(inv.pdf));
+        return reply.type("application/pdf").send(pdf);
       },
     );
 

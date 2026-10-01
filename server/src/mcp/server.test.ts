@@ -4,7 +4,13 @@ import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { describe, expect, it } from "vitest";
-import type { StatementProvider } from "../integrations/types.js";
+import { createPrisma } from "../db.js";
+import type {
+  NfseProvider,
+  SlipProvider,
+  StatementProvider,
+} from "../integrations/types.js";
+import { BillingService } from "../services/billingService.js";
 import { StatementService } from "../services/statementService.js";
 import { buildMcpServer } from "./server.js";
 
@@ -31,8 +37,29 @@ const account = {
   account: "143906330",
 };
 
+const db = createPrisma("file:./prisma/test.db");
+const nfse: NfseProvider = {
+  issue: async () => ({
+    number: "7",
+    pdf: Buffer.from("%PDF-nfse"),
+  }),
+};
+const slip: SlipProvider = {
+  create: async () => ({
+    codigoSolicitacao: "n",
+    linhaDigitavel: "999",
+    pdf: Buffer.from("%PDF-new"),
+  }),
+  cancel: async () => {},
+};
+
 async function connect(dir: string) {
-  const server = buildMcpServer(new StatementService(provider, account), dir);
+  const server = buildMcpServer(
+    new StatementService(provider, account),
+    new BillingService(db, nfse, slip),
+    db,
+    dir,
+  );
   const client = new Client({ name: "test", version: "1" });
   const [a, b] = InMemoryTransport.createLinkedPair();
   await Promise.all([server.connect(a), client.connect(b)]);
@@ -47,7 +74,9 @@ describe("MCP statement server", () => {
     const { tools } = await client.listTools();
     expect(tools.map((t) => t.name).sort()).toEqual([
       "export_statement",
+      "get_billing_documents",
       "get_statement",
+      "issue_billing_documents",
     ]);
   });
 
@@ -99,5 +128,112 @@ describe("MCP statement server", () => {
     });
     expect(r.isError).toBe(true);
     expect(textOf(r)).toContain("mês atual ou um anterior");
+  });
+});
+
+describe("MCP billing documents", () => {
+  const base = {
+    address: "Rua A",
+    addressNumber: "1",
+    neighborhood: "Centro",
+    city: "SP",
+    state: "SP",
+    zipcode: "01001000",
+    recurringValue: 10000,
+  };
+
+  async function seed(withSlip: boolean) {
+    await db.bankSlip.deleteMany();
+    await db.invoice.deleteMany();
+    await db.dpsSequence.deleteMany();
+    await db.billing.deleteMany();
+    await db.customer.deleteMany();
+    const c = await db.customer.create({
+      data: { ...base, name: "ACME Ltda", cnpj: "11222333000181" },
+    });
+    await db.billing.create({
+      data: {
+        customerId: c.id,
+        competence: "2026-08",
+        amountCents: 10000,
+        dueDate: "2026-09-10",
+        bankSlip: withSlip
+          ? {
+              create: {
+                codigoSolicitacao: "x",
+                linhaDigitavel: "123",
+                pdf: Buffer.from("%PDF-1.4 slip"),
+              },
+            }
+          : undefined,
+      },
+    });
+  }
+
+  const get = (client: any, args: object) =>
+    client.callTool({
+      name: "get_billing_documents",
+      arguments: { company: "acme", competence: "2026-08", ...args },
+    });
+
+  it("saves the slip PDF found by name or CNPJ", async () => {
+    await seed(true);
+    const dir = await mkdtemp(join(tmpdir(), "boleto-"));
+    const client = await connect(dir);
+    for (const company of ["acme", "11.222.333/0001-81"]) {
+      const r = await get(client, { company, documents: ["slip"] });
+      expect(r.isError).toBeFalsy();
+      expect(textOf(r)).toContain("Linha digitável: 123");
+    }
+    expect(await readdir(dir)).toEqual(["Boleto-ACME-Ltda-2026-08.pdf"]);
+  });
+
+  it("says what is missing and asks instead of issuing", async () => {
+    await seed(true);
+    const client = await connect(await mkdtemp(join(tmpdir(), "doc-")));
+    const r = await get(client, {});
+    expect(textOf(r)).toContain("Linha digitável: 123");
+    expect(textOf(r)).toContain("Não existe nota fiscal (NFS-e)");
+    expect(textOf(r)).toContain("Pergunte ao usuário");
+    expect(await db.invoice.count()).toBe(0);
+  });
+
+  it("reports a competence without billing", async () => {
+    await seed(true);
+    const client = await connect(".");
+    const r = await get(client, { competence: "2026-07" });
+    expect(textOf(r)).toContain("Não existe boleto nem nota fiscal");
+  });
+
+  it("issue_billing_documents issues only what is missing", async () => {
+    await seed(true);
+    const dir = await mkdtemp(join(tmpdir(), "issue-"));
+    const client = await connect(dir);
+    const r = await client.callTool({
+      name: "issue_billing_documents",
+      arguments: {
+        company: "acme",
+        competence: "2026-08",
+        documents: ["nfse"],
+      },
+    });
+    expect(textOf(r)).toContain("Nota fiscal emitida");
+    expect(await readdir(dir)).toEqual(["NFSe-ACME-Ltda-2026-08.pdf"]);
+    expect(await db.billing.count()).toBe(1);
+  });
+
+  it("issue_billing_documents requires a due date for the slip", async () => {
+    await seed(false);
+    const client = await connect(".");
+    const r = await client.callTool({
+      name: "issue_billing_documents",
+      arguments: {
+        company: "acme",
+        competence: "2026-08",
+        documents: ["slip"],
+      },
+    });
+    expect(r.isError).toBe(true);
+    expect(textOf(r)).toContain("due_date");
   });
 });

@@ -1,4 +1,5 @@
 import type { PrismaClient } from "../generated/prisma/client.js";
+import { renderDanfse } from "../integrations/nfse/danfse.js";
 import type { NfseProvider, SlipProvider } from "../integrations/types.js";
 
 /**
@@ -177,6 +178,73 @@ export class BillingService {
           ]
         : []),
     ]);
+  }
+
+  /**
+   * Makes sure the competence has the requested documents: reuses the
+   * competence's billing when there is one, otherwise creates it. Documents
+   * that already exist are not issued again.
+   */
+  async issueDocuments(input: {
+    customerId: string;
+    competence: string;
+    dueDate: string;
+    nfse: boolean;
+    slip: boolean;
+  }) {
+    const existing = await this.db.billing.findFirst({
+      where: { customerId: input.customerId, competence: input.competence },
+      include: { bankSlip: { select: { id: true } } },
+    });
+    let id: string;
+    if (existing) {
+      id = existing.id;
+      await this.db.billing.update({
+        where: { id },
+        data: {
+          issueNfse: existing.issueNfse || input.nfse,
+          issueSlip: existing.issueSlip || input.slip,
+          ...(input.slip && !existing.bankSlip && { dueDate: input.dueDate }),
+        },
+      });
+    } else {
+      const c = await this.db.customer.findUniqueOrThrow({
+        where: { id: input.customerId },
+      });
+      id = (
+        await this.db.billing.create({
+          data: {
+            customerId: c.id,
+            competence: input.competence,
+            amountCents: c.recurringValue,
+            dueDate: input.dueDate,
+            issueNfse: input.nfse,
+            issueSlip: input.slip,
+          },
+        })
+      ).id;
+    }
+    await this.process(id);
+    return this.db.billing.findUniqueOrThrow({
+      where: { id },
+      include: { invoice: { select: { id: true } }, bankSlip: true },
+    });
+  }
+
+  /** PDF of the NFS-e: rendered from the XML when issued here, else stored. */
+  async nfsePdf(billingId: string): Promise<Buffer | null> {
+    const inv = await this.db.invoice.findUnique({
+      where: { billingId },
+      include: { billing: { select: { customer: true } } },
+    });
+    if (inv?.source === "API" && inv.xml) {
+      const { city, state } = inv.billing.customer;
+      return renderDanfse(inv.xml, {
+        customerCity: city,
+        customerState: state,
+      });
+    }
+    return inv?.pdf ? Buffer.from(inv.pdf) : null;
   }
 
   /** Resumes from the failed step; safe to call on FAILED billings. */

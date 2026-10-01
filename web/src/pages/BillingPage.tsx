@@ -347,9 +347,18 @@ export default function BillingPage() {
                         </span>
                       )}
                       {b.invoice.hasPdf ? (
-                        <ActionLink href={`/api/billings/${b.id}/nfse.pdf`}>
-                          PDF
-                        </ActionLink>
+                        b.invoice.source === "API" ? (
+                          <ActionLink
+                            href={`/api/billings/${b.id}/nfse.pdf`}
+                            download={`nfse_${b.invoice.number ?? b.id}.pdf`}
+                          >
+                            Baixar Nota
+                          </ActionLink>
+                        ) : (
+                          <ActionLink href={`/api/billings/${b.id}/nfse.pdf`}>
+                            PDF
+                          </ActionLink>
+                        )
                       ) : (
                         <ActionButton onClick={() => openUpload(b)}>
                           Anexar PDF

@@ -15,6 +15,10 @@ const [
   { InterApi },
   { InterStatementProvider },
   { StatementService },
+  { BillingService },
+  { NfseNacionalProvider },
+  { InterSlipProvider },
+  { prisma },
   { buildMcpServer },
 ] = await Promise.all([
   import("@modelcontextprotocol/sdk/server/stdio.js"),
@@ -22,19 +26,28 @@ const [
   import("../integrations/inter/interApi.js"),
   import("../integrations/inter/interStatement.js"),
   import("../services/statementService.js"),
+  import("../services/billingService.js"),
+  import("../integrations/nfse/nfseNacional.js"),
+  import("../integrations/inter/interClient.js"),
+  import("../db.js"),
   import("./server.js"),
 ]);
 
-const statements = new StatementService(
-  new InterStatementProvider(new InterApi(env)),
-  {
-    companyName: env.COMPANY_NAME,
-    cnpj: env.COMPANY_CNPJ ?? "",
-    branch: env.INTER_BRANCH,
-    account: env.INTER_ACCOUNT ?? "",
-  },
-);
+const inter = new InterApi(env);
+const statements = new StatementService(new InterStatementProvider(inter), {
+  companyName: env.COMPANY_NAME,
+  cnpj: env.COMPANY_CNPJ ?? "",
+  branch: env.INTER_BRANCH,
+  account: env.INTER_ACCOUNT ?? "",
+});
 
-await buildMcpServer(statements, resolve(root, "exports")).connect(
-  new StdioServerTransport(),
-);
+await buildMcpServer(
+  statements,
+  new BillingService(
+    prisma,
+    new NfseNacionalProvider(env),
+    new InterSlipProvider(inter),
+  ),
+  prisma,
+  resolve(root, "exports"),
+).connect(new StdioServerTransport());
