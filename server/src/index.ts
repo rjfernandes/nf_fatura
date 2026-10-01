@@ -1,5 +1,6 @@
 import { env } from "./config/env.js";
 import { buildApp } from "./app.js";
+import { buildDeliveryProviders } from "./integrations/delivery.js";
 import { InterApi } from "./integrations/inter/interApi.js";
 import { InterSlipProvider } from "./integrations/inter/interClient.js";
 import { InterStatementProvider } from "./integrations/inter/interStatement.js";
@@ -21,5 +22,6 @@ const app = buildApp(
   new NfseNacionalProvider(env),
   new InterSlipProvider(inter),
   statements,
+  buildDeliveryProviders(env),
 );
 app.listen({ port: env.PORT, host: "0.0.0.0" });

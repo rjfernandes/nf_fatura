@@ -39,6 +39,9 @@ const schema = z.object({
   INTER_KEY_PATH: z.string().optional(),
   INTER_ACCOUNT: z.string().optional(), // x-conta-corrente header
   INTER_BRANCH: z.string().default("0001-9"), // shown on the exported statement
+  // Camim (delivery of NFS-e + boleto)
+  CAMIM_BASE_URL: z.string().default("https://pj.camim.com.br/api"),
+  CAMIM_TOKEN: z.string().optional(),
 });
 
 export const env = schema.parse(process.env);

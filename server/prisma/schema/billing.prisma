@@ -13,4 +13,5 @@ model Billing {
   updatedAt   DateTime  @updatedAt
   invoice     Invoice?
   bankSlip    BankSlip?
+  delivery    Delivery?
 }

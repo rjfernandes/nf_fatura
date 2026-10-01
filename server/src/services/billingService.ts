@@ -1,6 +1,7 @@
 import type { PrismaClient } from "../generated/prisma/client.js";
 import { renderDanfse } from "../integrations/nfse/danfse.js";
 import type { NfseProvider, SlipProvider } from "../integrations/types.js";
+import { httpError } from "../lib/httpError.js";
 
 /**
  * AUTO follows each customer's registration: NFS-e always, boleto only if
@@ -29,10 +30,6 @@ function resolveMode(mode: BillingMode, hasBankSlip: boolean) {
 }
 
 const msg = (e: unknown) => (e instanceof Error ? e.message : String(e));
-
-/** Error carrying the HTTP status the API error handler should answer with. */
-const httpError = (statusCode: number, message: string) =>
-  Object.assign(new Error(message), { statusCode });
 
 export class BillingService {
   constructor(
@@ -83,10 +80,17 @@ export class BillingService {
   async cancelSlip(billingId: string): Promise<{ billingRemoved: boolean }> {
     const b = await this.db.billing.findUniqueOrThrow({
       where: { id: billingId },
-      include: { bankSlip: true, invoice: { select: { id: true } } },
+      include: {
+        bankSlip: true,
+        invoice: { select: { id: true } },
+        delivery: { select: { status: true } },
+      },
     });
     if (!b.bankSlip) {
       throw new Error("Boleto não encontrado");
+    }
+    if (b.delivery?.status === "SENT") {
+      throw httpError(409, "Boleto já enviado ao cliente");
     }
     await this.slip.cancel(
       b.bankSlip.codigoSolicitacao,
@@ -104,6 +108,7 @@ export class BillingService {
     }
     await this.db.$transaction([
       this.db.bankSlip.delete({ where: { billingId } }),
+      this.db.delivery.deleteMany({ where: { billingId } }),
       this.db.billing.delete({ where: { id: billingId } }),
     ]);
     return { billingRemoved: true };
@@ -118,10 +123,16 @@ export class BillingService {
   async attachNfsePdf(billingId: string, pdf: Buffer, number?: string) {
     const b = await this.db.billing.findUnique({
       where: { id: billingId },
-      include: { invoice: { select: { id: true, source: true, pdf: true } } },
+      include: {
+        invoice: { select: { id: true, source: true, pdf: true } },
+        delivery: { select: { status: true } },
+      },
     });
     if (!b) {
       throw httpError(404, "Faturamento não encontrado");
+    }
+    if (b.delivery?.status === "SENT") {
+      throw httpError(409, "NFS-e já enviada ao cliente");
     }
     const data = new Uint8Array(pdf);
     if (!b.invoice) {
@@ -158,11 +169,19 @@ export class BillingService {
       where: { billingId },
       select: {
         source: true,
-        billing: { select: { bankSlip: { select: { id: true } } } },
+        billing: {
+          select: {
+            bankSlip: { select: { id: true } },
+            delivery: { select: { status: true } },
+          },
+        },
       },
     });
     if (!inv) {
       throw httpError(404, "NFS-e não encontrada");
+    }
+    if (inv.billing.delivery?.status === "SENT") {
+      throw httpError(409, "NFS-e já enviada ao cliente");
     }
     if (inv.source !== "MANUAL") {
       throw httpError(409, "Só é possível remover NFS-e anexada manualmente");

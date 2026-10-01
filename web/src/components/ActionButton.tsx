@@ -35,10 +35,14 @@ function Spinner() {
 export default function ActionButton({
   onClick,
   variant = "primary",
+  disabled = false,
+  title,
   children,
 }: {
   onClick: () => unknown;
   variant?: keyof typeof variants;
+  disabled?: boolean;
+  title?: string;
   children: ReactNode;
 }) {
   const [busy, setBusy] = useState(false);
@@ -58,7 +62,8 @@ export default function ActionButton({
     <button
       type="button"
       onClick={handle}
-      disabled={busy}
+      disabled={busy || disabled}
+      title={title}
       className={`${actionClass} ${variants[variant]}`}
     >
       {busy && <Spinner />}

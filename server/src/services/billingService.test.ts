@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { createPrisma } from "../db.js";
+import type { DeliveryProvider } from "../integrations/types.js";
 import { BillingService } from "./billingService.js";
+import { DeliveryService } from "./deliveryService.js";
 
 const db = createPrisma("file:./prisma/test.db");
 
@@ -15,6 +17,7 @@ const base = {
 };
 
 beforeEach(async () => {
+  await db.delivery.deleteMany();
   await db.bankSlip.deleteMany();
   await db.invoice.deleteMany();
   await db.billing.deleteMany();
@@ -328,5 +331,158 @@ describe("BillingService", () => {
         "anexada manualmente",
       );
     });
+  });
+});
+
+describe("DeliveryService", () => {
+  const pdf = Buffer.from("%PDF-1.4 x");
+
+  // Billing with NFS-e and boleto, both with PDF.
+  async function setup(
+    integration: string | null = "CAMIM",
+    station: string | null = "A",
+  ) {
+    const c = await db.customer.create({
+      data: {
+        ...base,
+        name: "D",
+        cnpj: "11222333000181",
+        hasBankSlip: true,
+        integration,
+        station,
+      },
+    });
+    const billing = new BillingService(
+      db,
+      { issue: async () => ({ number: "1", pdf }) },
+      {
+        create: async () => ({ codigoSolicitacao: "d", pdf }),
+        cancel: async () => {},
+      },
+    );
+    const [b] = await billing.run({
+      customerIds: [c.id],
+      competence: "2026-09",
+      dueDate: "2026-10-10",
+    });
+    return { b, billing };
+  }
+
+  function provider(over: Partial<DeliveryProvider> = {}) {
+    const sent: { competence: string }[] = [];
+    const p: DeliveryProvider = {
+      label: "Camim",
+      configured: true,
+      requiredFields: ["station"],
+      alreadySent: async () => ({ sent: false, raw: "[]" }),
+      send: async (r) => {
+        sent.push({ competence: r.competence });
+        return { raw: '{"ok":true}' };
+      },
+      ...over,
+    };
+    // Only nfsePdf is used; the providers are never called.
+    const billing = new BillingService(
+      db,
+      { issue: async () => ({}) },
+      {
+        create: async () => ({ codigoSolicitacao: "" }),
+        cancel: async () => {},
+      },
+    );
+    return {
+      p,
+      sent,
+      svc: new DeliveryService(db, { CAMIM: p }, (id) => billing.nfsePdf(id)),
+    };
+  }
+
+  it("sends the pair once and blocks changes to it afterwards", async () => {
+    const { b, billing } = await setup();
+    const { svc, sent } = provider();
+    await svc.send(b.id);
+    expect(sent).toEqual([{ competence: "2026-09" }]);
+    const d = await db.delivery.findUniqueOrThrow({
+      where: { billingId: b.id },
+    });
+    expect(d.status).toBe("SENT");
+    expect(d.sentAt).not.toBeNull();
+    await expect(svc.send(b.id)).rejects.toThrow("Já enviado");
+    await expect(billing.cancelSlip(b.id)).rejects.toThrow("já enviado");
+    await expect(billing.attachNfsePdf(b.id, pdf)).rejects.toThrow(
+      "já enviada",
+    );
+  });
+
+  it("refuses customers without integration and pairs missing a PDF", async () => {
+    const { b } = await setup(null);
+    const { svc } = provider();
+    await expect(svc.send(b.id)).rejects.toThrow("sem integração");
+    await db.customer.updateMany({ data: { integration: "CAMIM" } });
+    await db.bankSlip.update({
+      where: { billingId: b.id },
+      data: { pdf: null },
+    });
+    await expect(svc.send(b.id)).rejects.toThrow("PDF do boleto");
+    expect(await db.delivery.count()).toBe(0);
+  });
+
+  it("refuses when the customer lacks a field the integration requires", async () => {
+    const { b } = await setup("CAMIM", null);
+    const { svc, sent } = provider();
+    await expect(svc.send(b.id)).rejects.toThrow(
+      "Integração Camim incompleta: cliente sem posto",
+    );
+    expect(sent).toEqual([]);
+    expect(await db.delivery.count()).toBe(0);
+  });
+
+  it("refuses when the integration is not configured", async () => {
+    const { b } = await setup();
+    const { svc } = provider({ configured: false });
+    await expect(svc.send(b.id)).rejects.toThrow("não configurada");
+  });
+
+  it("marks as sent without re-sending when the pair is already there", async () => {
+    const { b } = await setup();
+    const { svc, sent } = provider({
+      alreadySent: async () => ({
+        sent: true,
+        raw: '[{"posto":"A"}]',
+        detail: "posto A",
+      }),
+    });
+    await svc.send(b.id);
+    expect(sent).toEqual([]);
+    expect(
+      (await db.delivery.findUniqueOrThrow({ where: { billingId: b.id } }))
+        .status,
+    ).toBe("SENT");
+  });
+
+  it("records a failure and lets it be retried", async () => {
+    const { b } = await setup();
+    let fail = true;
+    const { svc } = provider({
+      send: async () => {
+        if (fail) {
+          throw new Error("Camim: HTTP 500");
+        }
+        return { raw: "ok" };
+      },
+    });
+    await expect(svc.send(b.id)).rejects.toThrow("HTTP 500");
+    const failed = await db.delivery.findUniqueOrThrow({
+      where: { billingId: b.id },
+    });
+    expect(failed.status).toBe("FAILED");
+    expect(failed.error).toContain("HTTP 500");
+    fail = false;
+    await svc.send(b.id);
+    const ok = await db.delivery.findUniqueOrThrow({
+      where: { billingId: b.id },
+    });
+    expect(ok.status).toBe("SENT");
+    expect(ok.error).toBeNull();
   });
 });

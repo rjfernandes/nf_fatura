@@ -1,6 +1,14 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
-import { api, brl, formatCnpj, type Billing, type BillingMode } from "../api";
+import {
+  api,
+  brl,
+  formatCnpj,
+  incompleteIntegration,
+  type Billing,
+  type BillingMode,
+  type Integration,
+} from "../api";
 import ActionButton, { ActionLink } from "../components/ActionButton";
 import NfseUploadDialog from "../components/NfseUploadDialog";
 import Table from "../components/Table";
@@ -17,6 +25,26 @@ const label: Record<Billing["status"], string> = {
   COMPLETED: "Concluído",
   FAILED: "Falhou",
 };
+const deliveryBadge = {
+  PENDING: ["bg-slate-100 text-slate-700", "Pendente"],
+  SENT: ["bg-green-100 text-green-800", "Enviado"],
+  FAILED: ["bg-red-100 text-red-800", "Falhou"],
+} as const;
+
+// Why the pair can't be sent yet, if anything is missing.
+const missingForDelivery = (b: Billing, integration?: Integration) =>
+  incompleteIntegration(integration, b.customer) ??
+  (!b.invoice?.hasPdf
+    ? "Falta o PDF da NFS-e"
+    : !b.bankSlip?.hasPdf
+      ? "Falta o PDF do boleto"
+      : null);
+
+// Row of action buttons that never wraps.
+const actions = "flex items-center gap-1.5 whitespace-nowrap";
+
+const formatCompetence = (c: string) => c.split("-").reverse().join("/");
+
 const modeOptions: { value: BillingMode; label: string; button: string }[] = [
   { value: "AUTO", label: "Conforme o cadastro do cliente", button: "Gerar" },
   { value: "BOTH", label: "NFS-e e boleto", button: "Gerar NFS-e e boletos" },
@@ -34,9 +62,8 @@ const dueDay = new Date(
 );
 const defaultDueDate = `${dueDay.getFullYear()}-${String(dueDay.getMonth() + 1).padStart(2, "0")}-05`;
 
-// Competence is the month before the due date.
-const competenceDate = new Date(dueDay.getFullYear(), dueDay.getMonth() - 1, 1);
-const defaultCompetence = `${competenceDate.getFullYear()}-${String(competenceDate.getMonth() + 1).padStart(2, "0")}`;
+// Competence is the current month.
+const defaultCompetence = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
 
 // boleto_<competence>_<nickname, or the initials of the company name>.pdf
 const slipFileName = (b: Billing) => {
@@ -80,6 +107,10 @@ export default function BillingPage() {
     queryFn: api.customers,
   });
   const billings = useQuery({ queryKey: ["billings"], queryFn: api.billings });
+  const integrations = useQuery({
+    queryKey: ["integrations"],
+    queryFn: api.integrations,
+  });
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [competence, setCompetence] = useState(defaultCompetence);
   const [dueDate, setDueDate] = useState(defaultDueDate);
@@ -162,6 +193,18 @@ export default function BillingPage() {
     onSuccess: refresh,
     onError: (e) => alert((e as Error).message),
   });
+  const send = useMutation({
+    mutationFn: api.sendDelivery,
+    onSuccess: refresh,
+    onError: (e) => {
+      refresh();
+      alert((e as Error).message);
+    },
+  });
+  const integrationOf = (b: Billing) =>
+    integrations.data?.find((i) => i.key === b.customer.integration);
+  const integrationLabel = (b: Billing) =>
+    integrationOf(b)?.label ?? b.customer.integration;
   const openUpload = (b: Billing) => {
     attachNfse.reset();
     setUploadFor(b);
@@ -299,93 +342,128 @@ export default function BillingPage() {
               {
                 label: "Cliente",
                 field: (b) => (
-                  <>
+                  <div className="w-56" title={b.customer.name}>
+                    <span className="block truncate font-medium">
+                      {b.customer.nickName ?? b.customer.name}
+                    </span>
                     {b.customer.nickName && (
-                      <span className="block text-xs font-bold">
-                        {b.customer.nickName}
+                      <span className="block truncate text-xs text-slate-500">
+                        {b.customer.name}
                       </span>
                     )}
-                    <span className="font-medium">{b.customer.name}</span>
+                  </div>
+                ),
+              },
+              {
+                label: "Comp. / Valor",
+                className: "whitespace-nowrap",
+                field: (b) => (
+                  <>
+                    <span className="block text-xs text-slate-500">
+                      {formatCompetence(b.competence)}
+                    </span>
+                    <span className="font-medium">{brl(b.amountCents)}</span>
                   </>
                 ),
               },
-
-              { label: "Comp.", field: "competence" },
-              {
-                label: "Valor",
-                className: "text-right",
-                field: (b) => brl(b.amountCents),
-              },
               {
                 label: "Status",
-                field: (b) =>
-                  retrying.has(b.id) ? (
-                    <span className="rounded-full bg-orange-100 px-2 py-0.5 text-xs font-medium text-orange-800">
-                      Processando
-                    </span>
-                  ) : (
-                    <>
-                      <span
-                        className={`rounded-full px-2 py-0.5 text-xs font-medium ${badge[b.status]}`}
-                      >
-                        {label[b.status]}
+                field: (b) => (
+                  <>
+                    {retrying.has(b.id) ? (
+                      <span className="whitespace-nowrap rounded-full bg-orange-100 px-2 py-0.5 text-xs font-medium text-orange-800">
+                        Processando
                       </span>
-                      {b.error && <ErrorText text={b.error} />}
-                    </>
-                  ),
-              },
-              {
-                label: "NFS-e",
-                className: "space-x-2",
-                field: (b) =>
-                  b.invoice ? (
-                    <>
-                      <span>{b.invoice.number ?? "—"}</span>
-                      {b.invoice.source === "MANUAL" && (
-                        <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-600">
-                          manual
+                    ) : (
+                      <>
+                        <span
+                          className={`whitespace-nowrap rounded-full px-2 py-0.5 text-xs font-medium ${badge[b.status]}`}
+                        >
+                          {label[b.status]}
                         </span>
-                      )}
-                      {b.invoice.hasPdf ? (
-                        b.invoice.source === "API" ? (
-                          <ActionLink
-                            href={`/api/billings/${b.id}/nfse.pdf`}
-                            download={`nfse_${b.invoice.number ?? b.id}.pdf`}
-                          >
-                            Baixar Nota
-                          </ActionLink>
-                        ) : (
-                          <ActionLink href={`/api/billings/${b.id}/nfse.pdf`}>
-                            PDF
-                          </ActionLink>
-                        )
-                      ) : (
-                        <ActionButton onClick={() => openUpload(b)}>
-                          Anexar PDF
+                        {b.error && <ErrorText text={b.error} />}
+                      </>
+                    )}
+                    {b.status === "FAILED" && (
+                      <div className={`${actions} mt-2`}>
+                        <ActionButton onClick={() => retry.mutateAsync(b.id)}>
+                          Tentar novamente
                         </ActionButton>
-                      )}
-                      {b.invoice.source === "API" && (
-                        <ActionLink href={`/api/billings/${b.id}/nfse.xml`}>
-                          XML
-                        </ActionLink>
-                      )}
-                      {b.invoice.source === "MANUAL" && (
-                        <>
-                          <ActionButton onClick={() => openUpload(b)}>
-                            Substituir
-                          </ActionButton>
+                        {!b.invoice && !b.bankSlip && (
                           <ActionButton
                             variant="danger"
                             onClick={() =>
                               confirm(
-                                `Remover a NFS-e anexada de ${b.customer.name} (${b.competence})?`,
-                              ) && removeNfse.mutateAsync(b.id)
+                                `Remover o faturamento de ${b.customer.name} (${b.competence})?`,
+                              ) && remove.mutateAsync(b.id)
                             }
                           >
                             Remover
                           </ActionButton>
-                        </>
-                      )}
+                        )}
+                      </div>
+                    )}
+                  </>
+                ),
+              },
+              {
+                label: "NFS-e",
+                field: (b) =>
+                  b.invoice ? (
+                    <>
+                      <div className="mb-1.5 flex items-center gap-2 whitespace-nowrap">
+                        <span className="font-medium">
+                          {b.invoice.number ? `Nº ${b.invoice.number}` : "—"}
+                        </span>
+                        {b.invoice.source === "MANUAL" && (
+                          <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-600">
+                            manual
+                          </span>
+                        )}
+                      </div>
+                      <div className={actions}>
+                        {b.invoice.hasPdf ? (
+                          b.invoice.source === "API" ? (
+                            <ActionLink
+                              href={`/api/billings/${b.id}/nfse.pdf`}
+                              download={`nfse_${b.invoice.number ?? b.id}.pdf`}
+                            >
+                              Baixar Nota
+                            </ActionLink>
+                          ) : (
+                            <ActionLink href={`/api/billings/${b.id}/nfse.pdf`}>
+                              PDF
+                            </ActionLink>
+                          )
+                        ) : (
+                          <ActionButton onClick={() => openUpload(b)}>
+                            Anexar PDF
+                          </ActionButton>
+                        )}
+                        {b.invoice.source === "API" && (
+                          <ActionLink href={`/api/billings/${b.id}/nfse.xml`}>
+                            XML
+                          </ActionLink>
+                        )}
+                        {b.invoice.source === "MANUAL" &&
+                          b.delivery?.status !== "SENT" && (
+                            <>
+                              <ActionButton onClick={() => openUpload(b)}>
+                                Substituir
+                              </ActionButton>
+                              <ActionButton
+                                variant="danger"
+                                onClick={() =>
+                                  confirm(
+                                    `Remover a NFS-e anexada de ${b.customer.name} (${b.competence})?`,
+                                  ) && removeNfse.mutateAsync(b.id)
+                                }
+                              >
+                                Remover
+                              </ActionButton>
+                            </>
+                          )}
+                      </div>
                     </>
                   ) : (
                     <ActionButton onClick={() => openUpload(b)}>
@@ -395,10 +473,9 @@ export default function BillingPage() {
               },
               {
                 label: "Boleto",
-                className: "space-x-2",
                 field: (b) =>
                   b.bankSlip ? (
-                    <>
+                    <div className={actions}>
                       <ActionLink href={`/api/billings/${b.id}/boleto.pdf`}>
                         PDF
                       </ActionLink>
@@ -408,52 +485,92 @@ export default function BillingPage() {
                       >
                         Baixar
                       </ActionLink>
-                      <ActionButton
-                        variant="danger"
-                        onClick={() =>
-                          confirm(
-                            `Cancelar o boleto de ${b.customer.name} (${b.competence}) no Banco Inter? Essa ação não pode ser desfeita.` +
-                              (b.invoice
-                                ? " A NFS-e emitida será mantida no histórico."
-                                : " O faturamento também será removido do histórico."),
-                          ) && removeSlip.mutateAsync(b.id)
-                        }
-                      >
-                        Excluir
-                      </ActionButton>
-                    </>
-                  ) : (
-                    "—"
-                  ),
-              },
-              {
-                label: "",
-                className: "space-x-3 text-right",
-                field: (b) =>
-                  b.status === "FAILED" && (
-                    <>
-                      <ActionButton onClick={() => retry.mutateAsync(b.id)}>
-                        Tentar novamente
-                      </ActionButton>
-                      {!b.invoice && !b.bankSlip && (
+                      {b.delivery?.status !== "SENT" && (
                         <ActionButton
                           variant="danger"
                           onClick={() =>
                             confirm(
-                              `Remover o faturamento de ${b.customer.name} (${b.competence})?`,
-                            ) && remove.mutateAsync(b.id)
+                              `Cancelar o boleto de ${b.customer.name} (${b.competence}) no Banco Inter? Essa ação não pode ser desfeita.` +
+                                (b.invoice
+                                  ? " A NFS-e emitida será mantida no histórico."
+                                  : " O faturamento também será removido do histórico."),
+                            ) && removeSlip.mutateAsync(b.id)
                           }
                         >
-                          Remover
+                          Excluir
                         </ActionButton>
                       )}
-                    </>
+                    </div>
+                  ) : (
+                    <span className="text-slate-400">—</span>
                   ),
+              },
+              {
+                label: "Envio",
+                field: (b) => {
+                  if (!b.customer.integration) {
+                    return <span className="text-slate-400">—</span>;
+                  }
+                  const status = b.delivery?.status ?? "PENDING";
+                  const incomplete = incompleteIntegration(
+                    integrationOf(b),
+                    b.customer,
+                  );
+                  const missing = missingForDelivery(b, integrationOf(b));
+                  return (
+                    <>
+                      <div className={actions}>
+                        <ActionButton
+                          disabled={status === "SENT" || !!missing}
+                          title={
+                            status === "SENT"
+                              ? "Já enviado"
+                              : (missing ??
+                                `Enviar para ${integrationLabel(b)}`)
+                          }
+                          onClick={() =>
+                            confirm(
+                              `Enviar NFS-e e boleto de ${b.customer.name} (${b.competence}) para ${integrationLabel(b)}?`,
+                            ) && send.mutateAsync(b.id)
+                          }
+                        >
+                          Enviar
+                        </ActionButton>
+                        <span
+                          className={`whitespace-nowrap rounded-full px-2 py-0.5 text-xs font-medium ${deliveryBadge[status][0]}`}
+                          title={
+                            b.delivery?.sentAt
+                              ? new Date(b.delivery.sentAt).toLocaleString(
+                                  "pt-BR",
+                                )
+                              : undefined
+                          }
+                        >
+                          {deliveryBadge[status][1]}
+                        </span>
+                      </div>
+                      {incomplete && status !== "SENT" && (
+                        <p className="mt-1 max-w-xs text-xs text-amber-700">
+                          {incomplete}
+                        </p>
+                      )}
+                      {b.delivery?.error &&
+                        (status === "FAILED" ? (
+                          <ErrorText text={b.delivery.error} />
+                        ) : (
+                          <p className="mt-1 max-w-xs text-xs text-slate-500">
+                            {b.delivery.error}
+                          </p>
+                        ))}
+                    </>
+                  );
+                },
               },
             ]}
             rows={billings.data ?? []}
             rowKey={(b) => b.id}
             rowClassName="align-top"
+            cellPadding="px-3 py-2.5"
             emptyMessage="Nenhum faturamento ainda."
           />
         </div>
