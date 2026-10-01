@@ -143,6 +143,7 @@ describe("MCP billing documents", () => {
   };
 
   async function seed(withSlip: boolean) {
+    await db.delivery.deleteMany();
     await db.bankSlip.deleteMany();
     await db.invoice.deleteMany();
     await db.dpsSequence.deleteMany();

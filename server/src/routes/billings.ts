@@ -3,6 +3,7 @@ import type { FastifyPluginAsyncZod } from "fastify-type-provider-zod";
 import { z } from "zod";
 import { prisma } from "../db.js";
 import type { BillingService } from "../services/billingService.js";
+import type { DeliveryService } from "../services/deliveryService.js";
 
 const create = z.object({
   customerIds: z.array(z.string()).min(1),
@@ -17,35 +18,54 @@ const nfseQuery = z.object({
 const MAX_PDF_BYTES = 10 * 1024 * 1024;
 
 export const billingRoutes =
-  (service: BillingService): FastifyPluginAsyncZod =>
+  (service: BillingService, delivery: DeliveryService): FastifyPluginAsyncZod =>
   async (app) => {
     const include = {
-      customer: { select: { name: true, nickName: true, cnpj: true } },
+      customer: {
+        select: {
+          name: true,
+          nickName: true,
+          cnpj: true,
+          integration: true,
+          station: true,
+        },
+      },
       invoice: { select: { number: true, accessKey: true, source: true } },
       bankSlip: { select: { linhaDigitavel: true, status: true } },
+      delivery: { select: { status: true, error: true, sentAt: true } },
     };
 
-    // Flags which invoices have a PDF without loading the bytes of each one.
+    // Flags which invoices and boletos have a PDF without loading the bytes of
+    // each one.
     const withPdfFlag = async <
-      T extends { id: string; invoice: object | null },
+      T extends { id: string; invoice: object | null; bankSlip: object | null },
     >(
       billings: T[],
     ) => {
-      const withPdf = await prisma.invoice.findMany({
-        where: {
-          billingId: { in: billings.map((b) => b.id) },
-          OR: [
-            { pdf: { not: null } },
-            // Issued here: the DANFSe is rendered from the stored XML.
-            { source: "API", xml: { not: null } },
-          ],
-        },
-        select: { billingId: true },
-      });
-      const ids = new Set(withPdf.map((i) => i.billingId));
+      const ids = billings.map((b) => b.id);
+      const [invoices, slips] = await Promise.all([
+        prisma.invoice.findMany({
+          where: {
+            billingId: { in: ids },
+            OR: [
+              { pdf: { not: null } },
+              // Issued here: the DANFSe is rendered from the stored XML.
+              { source: "API", xml: { not: null } },
+            ],
+          },
+          select: { billingId: true },
+        }),
+        prisma.bankSlip.findMany({
+          where: { billingId: { in: ids }, pdf: { not: null } },
+          select: { billingId: true },
+        }),
+      ]);
+      const nfseIds = new Set(invoices.map((i) => i.billingId));
+      const slipIds = new Set(slips.map((s) => s.billingId));
       return billings.map((b) => ({
         ...b,
-        invoice: b.invoice && { ...b.invoice, hasPdf: ids.has(b.id) },
+        invoice: b.invoice && { ...b.invoice, hasPdf: nfseIds.has(b.id) },
+        bankSlip: b.bankSlip && { ...b.bankSlip, hasPdf: slipIds.has(b.id) },
       }));
     };
     const findOne = async (id: string) =>
@@ -105,6 +125,18 @@ export const billingRoutes =
         return findOne(req.params.id);
       },
     );
+
+    // Sends the NFS-e + boleto pair through the customer's integration.
+    app.post(
+      "/billings/:id/delivery",
+      { schema: { params: idParam } },
+      async (req) => {
+        await delivery.send(req.params.id);
+        return findOne(req.params.id);
+      },
+    );
+
+    app.get("/integrations", async () => delivery.list());
 
     app.delete(
       "/billings/:id/nfse",

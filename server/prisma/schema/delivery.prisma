@@ -1,0 +1,13 @@
+// Delivery of the NFS-e + boleto pair to the customer through its integration.
+// No row means the pair is still pending.
+model Delivery {
+  id          String    @id @default(cuid())
+  billingId   String    @unique
+  billing     Billing   @relation(fields: [billingId], references: [id])
+  integration String // CAMIM
+  status      String // SENT | FAILED
+  error       String?
+  response    String? // raw API response, for diagnostics
+  sentAt      DateTime?
+  updatedAt   DateTime  @updatedAt
+}

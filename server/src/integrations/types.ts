@@ -81,3 +81,35 @@ export interface StatementProvider {
   /** Balance at the end of the given day (YYYY-MM-DD). */
   balance(date: string): Promise<StatementBalance>;
 }
+
+export interface DeliveryCustomer extends BillingParty {
+  station?: string | null; // posto
+}
+
+/** Customer fields an integration may require, with their display names. */
+export const DELIVERY_FIELDS = { station: "posto" } as const;
+export type DeliveryField = keyof typeof DELIVERY_FIELDS;
+
+export interface DeliveryRequest {
+  customer: DeliveryCustomer;
+  competence: string; // YYYY-MM
+  nfsePdf: Buffer;
+  slipPdf: Buffer;
+}
+
+/** Sends the NFS-e + boleto pair to the customer's own system. */
+export interface DeliveryProvider {
+  label: string;
+  configured: boolean;
+  /** Customer fields that must be filled for this integration to work. */
+  requiredFields: DeliveryField[];
+  /**
+   * Whether this customer's pair for the competence is already there; detail
+   * describes what was found (status, missing NFS-e...).
+   */
+  alreadySent(
+    customer: DeliveryCustomer,
+    competence: string,
+  ): Promise<{ sent: boolean; raw: string; detail?: string }>;
+  send(req: DeliveryRequest): Promise<{ raw: string }>;
+}

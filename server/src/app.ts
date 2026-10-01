@@ -9,14 +9,17 @@ import { prisma } from "./db.js";
 import { billingRoutes } from "./routes/billings.js";
 import { customerRoutes } from "./routes/customers.js";
 import { BillingService } from "./services/billingService.js";
+import { DeliveryService } from "./services/deliveryService.js";
 import { statementRoutes } from "./routes/statements.js";
 import type { StatementService } from "./services/statementService.js";
+import type { DeliveryProviders } from "./integrations/delivery.js";
 import type { NfseProvider, SlipProvider } from "./integrations/types.js";
 
 export function buildApp(
   nfse: NfseProvider,
   slip: SlipProvider,
   statements: StatementService,
+  deliveryProviders: DeliveryProviders,
 ) {
   const app = Fastify({ logger: true });
   app.setValidatorCompiler(validatorCompiler);
@@ -41,8 +44,16 @@ export function buildApp(
     app.log.error(err);
     return reply.code(err.statusCode ?? 500).send({ message: err.message });
   });
+  const billing = new BillingService(prisma, nfse, slip);
   app.register(customerRoutes);
-  app.register(billingRoutes(new BillingService(prisma, nfse, slip)));
+  app.register(
+    billingRoutes(
+      billing,
+      new DeliveryService(prisma, deliveryProviders, (id) =>
+        billing.nfsePdf(id),
+      ),
+    ),
+  );
   app.register(statementRoutes(statements));
   return app;
 }

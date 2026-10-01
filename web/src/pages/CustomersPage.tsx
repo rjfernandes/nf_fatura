@@ -5,8 +5,10 @@ import {
   api,
   brl,
   formatCnpj,
+  incompleteIntegration,
   type Customer,
   type CustomerInput,
+  type IntegrationKey,
 } from "../api";
 import Table from "../components/Table";
 import {
@@ -18,8 +20,12 @@ import {
   moneyToCents,
 } from "../masks";
 
-interface FormValues extends Omit<CustomerInput, "recurringValue"> {
+interface FormValues extends Omit<
+  CustomerInput,
+  "recurringValue" | "integration"
+> {
   recurringValue: string; // reais, edited as text
+  integration: string; // "" = none
 }
 
 const empty: FormValues = {
@@ -34,8 +40,10 @@ const empty: FormValues = {
   state: "",
   zipcode: "",
   nickName: "",
+  station: "",
   recurringValue: "",
   hasBankSlip: false,
+  integration: "",
 };
 
 const input =
@@ -80,11 +88,17 @@ function CustomerForm({
           addressComplement: initial.addressComplement ?? "",
           cityIbgeCode: initial.cityIbgeCode ?? "",
           nickName: initial.nickName ?? "",
+          station: initial.station ?? "",
+          integration: initial.integration ?? "",
           recurringValue: centsToMasked(initial.recurringValue),
         }
       : empty,
   });
   const [cepMsg, setCepMsg] = useState("");
+  const integrations = useQuery({
+    queryKey: ["integrations"],
+    queryFn: api.integrations,
+  });
 
   const save = useMutation({
     mutationFn: (v: FormValues) => {
@@ -93,6 +107,8 @@ function CustomerForm({
         addressComplement: v.addressComplement || null,
         cityIbgeCode: v.cityIbgeCode || null,
         nickName: v.nickName || null,
+        station: v.station || null,
+        integration: (v.integration || null) as IntegrationKey | null,
         recurringValue: moneyToCents(v.recurringValue),
       };
       return initial
@@ -229,6 +245,31 @@ function CustomerForm({
           />{" "}
           Possui boleto bancário
         </label>
+        <Field label="Integração de envio" className="sm:col-span-2">
+          <select className={input} {...register("integration")}>
+            <option value="">Nenhuma</option>
+            {integrations.data?.map((i) => (
+              <option key={i.key} value={i.key}>
+                {i.label}
+                {i.configured ? "" : " (não configurada)"}
+              </option>
+            ))}
+          </select>
+        </Field>
+        <Field label="Posto" className="sm:col-span-1">
+          <input
+            className={`${input} uppercase`}
+            maxLength={1}
+            placeholder="A"
+            {...register("station", {
+              onChange: (e) =>
+                setValue(
+                  "station",
+                  e.target.value.toUpperCase().replace(/[^A-Z]/g, ""),
+                ),
+            })}
+          />
+        </Field>
       </div>
       {save.error && (
         <p className="mt-3 text-sm text-red-600">
@@ -262,13 +303,19 @@ export default function CustomersPage() {
   });
   const [editing, setEditing] = useState<Customer | "new" | null>(null);
   const [q, setQ] = useState("");
+  const integrations = useQuery({
+    queryKey: ["integrations"],
+    queryFn: api.integrations,
+  });
   const remove = useMutation({
     mutationFn: api.deleteCustomer,
     onSuccess: () => qc.invalidateQueries({ queryKey: ["customers"] }),
     onError: (e: Error) => alert(e.message),
   });
   const list = data.filter((c) =>
-    (c.name + (c.nickName ?? "") + c.cnpj).toLowerCase().includes(q.toLowerCase()),
+    (c.name + (c.nickName ?? "") + c.cnpj)
+      .toLowerCase()
+      .includes(q.toLowerCase()),
   );
 
   return (
@@ -302,6 +349,7 @@ export default function CustomersPage() {
               field: (c) => <span className="font-medium">{c.name}</span>,
             },
             { label: "Apelido", field: (c) => c.nickName ?? "—" },
+            { label: "Posto", field: (c) => c.station ?? "—" },
             { label: "CNPJ", field: (c) => formatCnpj(c.cnpj) },
             { label: "Cidade/UF", field: (c) => `${c.city}/${c.state}` },
             {
@@ -310,6 +358,31 @@ export default function CustomersPage() {
               field: (c) => brl(c.recurringValue),
             },
             { label: "Boleto", field: (c) => (c.hasBankSlip ? "Sim" : "Não") },
+            {
+              label: "Integração",
+              field: (c) => {
+                if (!c.integration) {
+                  return "—";
+                }
+                const i = integrations.data?.find(
+                  (i) => i.key === c.integration,
+                );
+                const incomplete = incompleteIntegration(i, c);
+                return (
+                  <>
+                    {i?.label ?? c.integration}
+                    {incomplete && (
+                      <span
+                        title={incomplete}
+                        className="ml-2 rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800"
+                      >
+                        incompleta
+                      </span>
+                    )}
+                  </>
+                );
+              },
+            },
             {
               label: "",
               className: "space-x-3 text-right",

@@ -1,6 +1,7 @@
 import type { FastifyPluginAsyncZod } from "fastify-type-provider-zod";
 import { z } from "zod";
 import { prisma } from "../db.js";
+import { INTEGRATIONS } from "../integrations/delivery.js";
 import { isValidCnpj, normalizeCnpj, onlyDigits } from "../lib/cnpj.js";
 
 const body = z.object({
@@ -27,8 +28,15 @@ const body = z.object({
     .transform(onlyDigits)
     .pipe(z.string().length(8, "CEP inválido")),
   nickName: z.string().trim().nullish(),
+  station: z
+    .string()
+    .trim()
+    .transform((s) => s.toUpperCase())
+    .pipe(z.string().regex(/^[A-Z]$/, "Posto deve ser uma única letra"))
+    .nullish(),
   recurringValue: z.number().int().nonnegative(), // cents
   hasBankSlip: z.boolean(),
+  integration: z.enum(INTEGRATIONS).nullish(),
 });
 const idParam = z.object({ id: z.string() });
 

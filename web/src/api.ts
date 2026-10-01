@@ -11,10 +11,38 @@ export interface Customer {
   state: string;
   zipcode: string;
   nickName: string | null;
+  station: string | null; // posto, one uppercase letter
   recurringValue: number; // cents
   hasBankSlip: boolean;
+  integration: IntegrationKey | null;
 }
 export type CustomerInput = Omit<Customer, "id">;
+
+export type IntegrationKey = "CAMIM";
+
+/** Customer fields an integration may require, with their display names. */
+export const DELIVERY_FIELDS = { station: "posto" } as const;
+export type DeliveryField = keyof typeof DELIVERY_FIELDS;
+
+export interface Integration {
+  key: IntegrationKey;
+  label: string;
+  configured: boolean;
+  requiredFields: DeliveryField[];
+}
+
+/** Why the customer's integration is incomplete, or null when it is not. */
+export function incompleteIntegration(
+  integration: Integration | undefined,
+  customer: Partial<Record<DeliveryField, string | null>>,
+) {
+  const missing = integration?.requiredFields.filter((f) => !customer[f]) ?? [];
+  return missing.length
+    ? `Integração ${integration!.label} incompleta: cliente sem ${missing
+        .map((f) => DELIVERY_FIELDS[f])
+        .join(", ")}`
+    : null;
+}
 
 export type BillingMode = "AUTO" | "NFSE" | "SLIP" | "BOTH";
 
@@ -28,14 +56,29 @@ export interface Billing {
   status: "PENDING" | "NFSE_ISSUED" | "COMPLETED" | "FAILED";
   error: string | null;
   createdAt: string;
-  customer: { name: string; nickName: string | null; cnpj: string };
+  customer: {
+    name: string;
+    nickName: string | null;
+    cnpj: string;
+    integration: IntegrationKey | null;
+    station: string | null;
+  };
   invoice: {
     number: string | null;
     accessKey: string | null;
     source: "API" | "MANUAL";
     hasPdf: boolean;
   } | null;
-  bankSlip: { linhaDigitavel: string | null; status: string | null } | null;
+  bankSlip: {
+    linhaDigitavel: string | null;
+    status: string | null;
+    hasPdf: boolean;
+  } | null;
+  delivery: {
+    status: "SENT" | "FAILED";
+    error: string | null;
+    sentAt: string | null;
+  } | null;
 }
 
 export interface StatementEntry {
@@ -115,6 +158,9 @@ export const api = {
       new Blob([file], { type: "application/pdf" }),
     ),
   deleteNfse: (id: string) => call<void>("DELETE", `/billings/${id}/nfse`),
+  integrations: () => call<Integration[]>("GET", "/integrations"),
+  sendDelivery: (id: string) =>
+    call<Billing>("POST", `/billings/${id}/delivery`),
 };
 
 export const brl = (cents: number) =>

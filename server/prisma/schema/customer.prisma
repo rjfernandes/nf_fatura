@@ -11,8 +11,10 @@ model Customer {
   state             String
   zipcode           String
   nickName          String?
+  station           String? // posto: one uppercase letter (A, Y, G...)
   recurringValue    Int // cents
   hasBankSlip       Boolean   @default(false)
+  integration       String? // delivery integration (CAMIM), null = none
   createdAt         DateTime  @default(now())
   updatedAt         DateTime  @updatedAt
   billings          Billing[]
