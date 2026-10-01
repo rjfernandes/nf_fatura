@@ -210,4 +210,123 @@ describe("BillingService", () => {
     expect(await svc.cancelSlip(b.id)).toEqual({ billingRemoved: true });
     expect(await db.billing.count({ where: { id: b.id } })).toBe(0);
   });
+
+  describe("manual NFS-e", () => {
+    const pdf = Buffer.from("%PDF-1.4 manual");
+
+    it("attaches to a boleto-only billing as a MANUAL invoice and can be removed", async () => {
+      const c = await db.customer.create({
+        data: { ...base, name: "A", cnpj: "11222333000181", hasBankSlip: true },
+      });
+      const svc = new BillingService(
+        db,
+        { issue: async () => ({ number: "1" }) },
+        {
+          create: async () => ({ codigoSolicitacao: "a" }),
+          cancel: async () => {},
+        },
+      );
+      const [b] = await svc.run({
+        customerIds: [c.id],
+        competence: "2026-09",
+        dueDate: "2026-10-10",
+        mode: "SLIP",
+      });
+      await svc.attachNfsePdf(b.id, pdf, "123");
+      const after = await db.billing.findUniqueOrThrow({
+        where: { id: b.id },
+        include: { invoice: true },
+      });
+      expect(after.status).toBe("COMPLETED");
+      expect(after.issueNfse).toBe(true);
+      expect(after.invoice?.source).toBe("MANUAL");
+      expect(after.invoice?.number).toBe("123");
+      expect(Buffer.from(after.invoice!.pdf!)).toEqual(pdf);
+
+      await svc.removeManualNfse(b.id);
+      const removed = await db.billing.findUniqueOrThrow({
+        where: { id: b.id },
+        include: { invoice: true },
+      });
+      expect(removed.invoice).toBeNull();
+      expect(removed.issueNfse).toBe(false);
+    });
+
+    it("lets a failed billing be retried without issuing the NFS-e through the API", async () => {
+      const c = await db.customer.create({
+        data: { ...base, name: "F", cnpj: "11222333000181", hasBankSlip: true },
+      });
+      let issued = 0,
+        fail = true;
+      const svc = new BillingService(
+        db,
+        {
+          issue: async () => {
+            issued++;
+            if (fail) {
+              throw new Error("sefin down");
+            }
+            return { number: "1" };
+          },
+        },
+        {
+          create: async () => ({ codigoSolicitacao: "f" }),
+          cancel: async () => {},
+        },
+      );
+      const [b] = await svc.run({
+        customerIds: [c.id],
+        competence: "2026-09",
+        dueDate: "2026-10-10",
+      });
+      expect(b.status).toBe("FAILED");
+      await svc.attachNfsePdf(b.id, pdf);
+      fail = false;
+      await svc.process(b.id);
+      const after = await db.billing.findUniqueOrThrow({
+        where: { id: b.id },
+        include: { bankSlip: true },
+      });
+      expect(after.status).toBe("COMPLETED");
+      expect(after.bankSlip).not.toBeNull();
+      expect(issued).toBe(1);
+    });
+
+    it("fills a missing PDF of an API invoice but never replaces an existing one", async () => {
+      const c = await db.customer.create({
+        data: {
+          ...base,
+          name: "P",
+          cnpj: "11222333000181",
+          hasBankSlip: false,
+        },
+      });
+      const svc = new BillingService(
+        db,
+        { issue: async () => ({ number: "7", xml: "<x/>" }) },
+        {
+          create: async () => ({ codigoSolicitacao: "p" }),
+          cancel: async () => {},
+        },
+      );
+      const [b] = await svc.run({
+        customerIds: [c.id],
+        competence: "2026-09",
+        dueDate: "2026-10-10",
+      });
+      await svc.attachNfsePdf(b.id, pdf, "999");
+      const inv = await db.invoice.findUniqueOrThrow({
+        where: { billingId: b.id },
+      });
+      expect(inv.source).toBe("API");
+      expect(inv.number).toBe("7");
+      expect(Buffer.from(inv.pdf!)).toEqual(pdf);
+      await expect(svc.attachNfsePdf(b.id, pdf)).rejects.toThrow(
+        "já tem o PDF oficial",
+      );
+      await expect(svc.removeManualNfse(b.id)).rejects.toThrow(
+        "anexada manualmente",
+      );
+    });
+  });
 });

@@ -29,6 +29,10 @@ function resolveMode(mode: BillingMode, hasBankSlip: boolean) {
 
 const msg = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
+/** Error carrying the HTTP status the API error handler should answer with. */
+const httpError = (statusCode: number, message: string) =>
+  Object.assign(new Error(message), { statusCode });
+
 export class BillingService {
   constructor(
     private db: PrismaClient,
@@ -102,6 +106,77 @@ export class BillingService {
       this.db.billing.delete({ where: { id: billingId } }),
     ]);
     return { billingRemoved: true };
+  }
+
+  /**
+   * Attaches the PDF of an NFS-e issued outside the system (Emissor Web). It
+   * becomes a MANUAL invoice, so process() won't issue another one through the
+   * API. An API invoice only gets the PDF when it has none (DANFSe download
+   * failed); an official PDF is never overwritten.
+   */
+  async attachNfsePdf(billingId: string, pdf: Buffer, number?: string) {
+    const b = await this.db.billing.findUnique({
+      where: { id: billingId },
+      include: { invoice: { select: { id: true, source: true, pdf: true } } },
+    });
+    if (!b) {
+      throw httpError(404, "Faturamento não encontrado");
+    }
+    const data = new Uint8Array(pdf);
+    if (!b.invoice) {
+      await this.db.$transaction([
+        this.db.invoice.create({
+          data: { billingId, source: "MANUAL", pdf: data, number },
+        }),
+        this.db.billing.update({
+          where: { id: billingId },
+          data: { issueNfse: true },
+        }),
+      ]);
+      return;
+    }
+    if (b.invoice.source === "MANUAL") {
+      await this.db.invoice.update({
+        where: { billingId },
+        data: { pdf: data, ...(number ? { number } : {}) },
+      });
+      return;
+    }
+    if (b.invoice.pdf) {
+      throw httpError(409, "Esta NFS-e já tem o PDF oficial");
+    }
+    await this.db.invoice.update({ where: { billingId }, data: { pdf: data } });
+  }
+
+  /**
+   * Removes a MANUAL invoice. With a boleto, issueNfse is cleared so a retry
+   * won't issue a new NFS-e through the API.
+   */
+  async removeManualNfse(billingId: string) {
+    const inv = await this.db.invoice.findUnique({
+      where: { billingId },
+      select: {
+        source: true,
+        billing: { select: { bankSlip: { select: { id: true } } } },
+      },
+    });
+    if (!inv) {
+      throw httpError(404, "NFS-e não encontrada");
+    }
+    if (inv.source !== "MANUAL") {
+      throw httpError(409, "Só é possível remover NFS-e anexada manualmente");
+    }
+    await this.db.$transaction([
+      this.db.invoice.delete({ where: { billingId } }),
+      ...(inv.billing.bankSlip
+        ? [
+            this.db.billing.update({
+              where: { id: billingId },
+              data: { issueNfse: false },
+            }),
+          ]
+        : []),
+    ]);
   }
 
   /** Resumes from the failed step; safe to call on FAILED billings. */
