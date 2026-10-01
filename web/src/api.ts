@@ -44,6 +44,8 @@ export function incompleteIntegration(
     : null;
 }
 
+export type DeliveryParts = "NFSE" | "SLIP" | "BOTH";
+
 export type BillingMode = "AUTO" | "NFSE" | "SLIP" | "BOTH";
 
 export interface Billing {
@@ -76,6 +78,7 @@ export interface Billing {
   } | null;
   delivery: {
     status: "SENT" | "FAILED";
+    parts: DeliveryParts;
     error: string | null;
     sentAt: string | null;
   } | null;
@@ -159,8 +162,8 @@ export const api = {
     ),
   deleteNfse: (id: string) => call<void>("DELETE", `/billings/${id}/nfse`),
   integrations: () => call<Integration[]>("GET", "/integrations"),
-  sendDelivery: (id: string) =>
-    call<Billing>("POST", `/billings/${id}/delivery`),
+  sendDelivery: (v: { id: string; parts: DeliveryParts }) =>
+    call<Billing>("POST", `/billings/${v.id}/delivery`, { parts: v.parts }),
 };
 
 export const brl = (cents: number) =>

@@ -7,6 +7,7 @@ import {
   incompleteIntegration,
   type Billing,
   type BillingMode,
+  type DeliveryParts,
   type Integration,
 } from "../api";
 import ActionButton, { ActionLink } from "../components/ActionButton";
@@ -31,14 +32,31 @@ const deliveryBadge = {
   FAILED: ["bg-red-100 text-red-800", "Falhou"],
 } as const;
 
-// Why the pair can't be sent yet, if anything is missing.
+const partsOptions: { value: DeliveryParts; label: string }[] = [
+  { value: "BOTH", label: "NFS-e e boleto" },
+  { value: "NFSE", label: "NFS-e" },
+  { value: "SLIP", label: "Boleto" },
+];
+
+// Which documents can be sent: the ones already generated, with their PDF.
+const availableParts = (b: Billing) => ({
+  NFSE: !!b.invoice?.hasPdf,
+  SLIP: !!b.bankSlip?.hasPdf,
+  BOTH: !!b.invoice?.hasPdf && !!b.bankSlip?.hasPdf,
+});
+
+// Default choice: both when available, else the one that exists.
+const defaultParts = (b: Billing): DeliveryParts => {
+  const a = availableParts(b);
+  return a.BOTH ? "BOTH" : a.SLIP && !a.NFSE ? "SLIP" : "NFSE";
+};
+
+// Why nothing can be sent yet, if that is the case.
 const missingForDelivery = (b: Billing, integration?: Integration) =>
   incompleteIntegration(integration, b.customer) ??
-  (!b.invoice?.hasPdf
-    ? "Falta o PDF da NFS-e"
-    : !b.bankSlip?.hasPdf
-      ? "Falta o PDF do boleto"
-      : null);
+  (!b.invoice?.hasPdf && !b.bankSlip?.hasPdf
+    ? "Falta o PDF da NFS-e e do boleto"
+    : null);
 
 // Row of action buttons that never wraps.
 const actions = "flex items-center gap-1.5 whitespace-nowrap";
@@ -65,17 +83,16 @@ const defaultDueDate = `${dueDay.getFullYear()}-${String(dueDay.getMonth() + 1).
 // Competence is the current month.
 const defaultCompetence = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
 
-// boleto_<competence>_<nickname, or the initials of the company name>.pdf
-const slipFileName = (b: Billing) => {
+// <prefix>_<competence>_<nickname, or the initials of the company name>.<ext>
+const fileName = (prefix: string, ext: string, b: Billing) => {
   const { nickName, name } = b.customer;
   const who =
     nickName?.trim() ||
     name
       .split(/\s+/)
       .map((w) => w[0])
-      .join("")
-      .toUpperCase();
-  return `${`boleto_${b.competence}_${who}`.replace(/\W+/g, "_").toLowerCase()}.pdf`;
+      .join("");
+  return `${`${prefix}_${b.competence}_${who}`.replace(/\W+/g, "_").toLowerCase()}.${ext}`;
 };
 
 // Long errors (e.g. an HTML 502 page) are clamped, with a toggle to read all.
@@ -193,6 +210,9 @@ export default function BillingPage() {
     onSuccess: refresh,
     onError: (e) => alert((e as Error).message),
   });
+  const [partsChoice, setPartsChoice] = useState<Record<string, DeliveryParts>>(
+    {},
+  );
   const send = useMutation({
     mutationFn: api.sendDelivery,
     onSuccess: refresh,
@@ -426,7 +446,7 @@ export default function BillingPage() {
                           b.invoice.source === "API" ? (
                             <ActionLink
                               href={`/api/billings/${b.id}/nfse.pdf`}
-                              download={`nfse_${b.invoice.number ?? b.id}.pdf`}
+                              download={fileName("nota_fiscal", "pdf", b)}
                             >
                               Baixar Nota
                             </ActionLink>
@@ -441,7 +461,10 @@ export default function BillingPage() {
                           </ActionButton>
                         )}
                         {b.invoice.source === "API" && (
-                          <ActionLink href={`/api/billings/${b.id}/nfse.xml`}>
+                          <ActionLink
+                            href={`/api/billings/${b.id}/nfse.xml`}
+                            download={fileName("nota_fiscal", "xml", b)}
+                          >
                             XML
                           </ActionLink>
                         )}
@@ -481,7 +504,7 @@ export default function BillingPage() {
                       </ActionLink>
                       <ActionLink
                         href={`/api/billings/${b.id}/boleto.pdf`}
-                        download={slipFileName(b)}
+                        download={fileName("boleto", "pdf", b)}
                       >
                         Baixar
                       </ActionLink>
@@ -517,9 +540,39 @@ export default function BillingPage() {
                     b.customer,
                   );
                   const missing = missingForDelivery(b, integrationOf(b));
+                  const available = availableParts(b);
+                  // Falls back to the default if the chosen one is gone.
+                  const chosen =
+                    partsChoice[b.id] && available[partsChoice[b.id]]
+                      ? partsChoice[b.id]
+                      : defaultParts(b);
+                  const chosenLabel = partsOptions.find(
+                    (o) => o.value === chosen,
+                  )!.label;
                   return (
                     <>
                       <div className={actions}>
+                        <select
+                          className="rounded-md border border-slate-300 px-1.5 py-1 text-xs disabled:opacity-50"
+                          value={chosen}
+                          disabled={status === "SENT" || !!missing}
+                          onChange={(e) =>
+                            setPartsChoice((c) => ({
+                              ...c,
+                              [b.id]: e.target.value as DeliveryParts,
+                            }))
+                          }
+                        >
+                          {partsOptions.map((o) => (
+                            <option
+                              key={o.value}
+                              value={o.value}
+                              disabled={!available[o.value]}
+                            >
+                              {o.label}
+                            </option>
+                          ))}
+                        </select>
                         <ActionButton
                           disabled={status === "SENT" || !!missing}
                           title={
@@ -530,8 +583,8 @@ export default function BillingPage() {
                           }
                           onClick={() =>
                             confirm(
-                              `Enviar NFS-e e boleto de ${b.customer.name} (${b.competence}) para ${integrationLabel(b)}?`,
-                            ) && send.mutateAsync(b.id)
+                              `Enviar ${chosenLabel} de ${b.customer.name} (${b.competence}) para ${integrationLabel(b)}?`,
+                            ) && send.mutateAsync({ id: b.id, parts: chosen })
                           }
                         >
                           Enviar

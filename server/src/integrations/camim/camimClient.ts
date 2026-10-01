@@ -2,6 +2,7 @@ import type { Env } from "../../config/env.js";
 import type {
   DeliveryCustomer,
   DeliveryField,
+  DeliveryParts,
   DeliveryProvider,
   DeliveryRequest,
 } from "../types.js";
@@ -9,8 +10,8 @@ import type {
 type CamimEnv = Pick<Env, "CAMIM_BASE_URL" | "CAMIM_TOKEN">;
 
 /**
- * Camim PJ portal: the boleto of the month goes together with its NFS-e. A
- * single token identifies us; the customer's posto tells which clinic it is.
+ * Camim PJ portal: the boleto of the month and its NFS-e, together or one at a
+ * time. A single token identifies us; the customer's posto tells which clinic it is.
  */
 export class CamimDeliveryProvider implements DeliveryProvider {
   label = "Camim";
@@ -44,9 +45,14 @@ export class CamimDeliveryProvider implements DeliveryProvider {
 
   /**
    * The month's query lists the boletos already there, one per posto. The pair
-   * counts as sent when there is one for the customer's posto (posto_letra).
+   * counts as sent when there is one for the customer's posto (posto_letra);
+   * an NFS-e alone also needs that boleto to already have its nota fiscal.
    */
-  async alreadySent(customer: DeliveryCustomer, competence: string) {
+  async alreadySent(
+    customer: DeliveryCustomer,
+    competence: string,
+    parts: DeliveryParts = "BOTH",
+  ) {
     const raw = await this.call(
       `${this.url}?competencia=${encodeURIComponent(competence)}`,
       { headers: this.headers() },
@@ -57,7 +63,7 @@ export class CamimDeliveryProvider implements DeliveryProvider {
           (i) => i.posto_letra?.trim().toUpperCase() === station,
         )
       : undefined;
-    if (!item) {
+    if (!item || (parts === "NFSE" && item.tem_nota_fiscal === false)) {
       return { sent: false, raw };
     }
     const detail = [
@@ -77,16 +83,21 @@ export class CamimDeliveryProvider implements DeliveryProvider {
     const form = new FormData();
     form.append("competencia", req.competence);
     form.append("posto", req.customer.station);
-    form.append(
-      "arquivo",
-      new Blob([new Uint8Array(req.slipPdf)], { type: "application/pdf" }),
-      `boleto-${req.competence}.pdf`,
-    );
-    form.append(
-      "nota_fiscal",
-      new Blob([new Uint8Array(req.nfsePdf)], { type: "application/pdf" }),
-      `nfse-${req.competence}.pdf`,
-    );
+    if (!req.slipPdf && !req.nfsePdf) {
+      throw new Error("Camim: nada para enviar");
+    }
+    const pdf = (buf: Buffer) =>
+      new Blob([new Uint8Array(buf)], { type: "application/pdf" });
+    if (req.slipPdf) {
+      form.append("arquivo", pdf(req.slipPdf), `boleto-${req.competence}.pdf`);
+    }
+    if (req.nfsePdf) {
+      form.append(
+        "nota_fiscal",
+        pdf(req.nfsePdf),
+        `nfse-${req.competence}.pdf`,
+      );
+    }
     const raw = await this.call(this.url, {
       method: "POST",
       headers: this.headers(),

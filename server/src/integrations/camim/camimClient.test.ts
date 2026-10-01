@@ -50,6 +50,43 @@ describe("CamimDeliveryProvider", () => {
     expect(await (form.get("nota_fiscal") as File).text()).toBe("nf");
   });
 
+  it("posts only the document that was chosen", async () => {
+    const fetch = stubFetch("{}", 201);
+    const p = new CamimDeliveryProvider(env);
+    await p.send({
+      customer,
+      competence: "2026-09",
+      nfsePdf: Buffer.from("nf"),
+    });
+    let form = (fetch.mock.calls[0][1] as RequestInit).body as FormData;
+    expect(form.has("arquivo")).toBe(false);
+    expect(form.has("nota_fiscal")).toBe(true);
+    await p.send({
+      customer,
+      competence: "2026-09",
+      slipPdf: Buffer.from("boleto"),
+    });
+    form = (fetch.mock.calls[1][1] as RequestInit).body as FormData;
+    expect(form.has("arquivo")).toBe(true);
+    expect(form.has("nota_fiscal")).toBe(false);
+    await expect(p.send({ customer, competence: "2026-09" })).rejects.toThrow(
+      "nada para enviar",
+    );
+  });
+
+  it("an NFS-e alone is not sent yet when the boleto there has no nota", async () => {
+    const item = (nota: boolean) =>
+      JSON.stringify({
+        boletos: [{ id: 1, posto_letra: "G", tem_nota_fiscal: nota }],
+      });
+    const p = new CamimDeliveryProvider(env);
+    stubFetch(item(false));
+    expect((await p.alreadySent(customer, "2026-09", "NFSE")).sent).toBe(false);
+    expect((await p.alreadySent(customer, "2026-09", "SLIP")).sent).toBe(true);
+    stubFetch(item(true));
+    expect((await p.alreadySent(customer, "2026-09", "NFSE")).sent).toBe(true);
+  });
+
   it("refuses to send without the customer's posto", async () => {
     const fetch = stubFetch("{}");
     await expect(

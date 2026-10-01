@@ -90,26 +90,31 @@ export interface DeliveryCustomer extends BillingParty {
 export const DELIVERY_FIELDS = { station: "posto" } as const;
 export type DeliveryField = keyof typeof DELIVERY_FIELDS;
 
+/** What goes to the customer: the NFS-e, the boleto or both. */
+export const DELIVERY_PARTS = ["NFSE", "SLIP", "BOTH"] as const;
+export type DeliveryParts = (typeof DELIVERY_PARTS)[number];
+
 export interface DeliveryRequest {
   customer: DeliveryCustomer;
   competence: string; // YYYY-MM
-  nfsePdf: Buffer;
-  slipPdf: Buffer;
+  nfsePdf?: Buffer; // present when the NFS-e is part of the delivery
+  slipPdf?: Buffer; // present when the boleto is part of the delivery
 }
 
-/** Sends the NFS-e + boleto pair to the customer's own system. */
+/** Sends the NFS-e, the boleto or both to the customer's own system. */
 export interface DeliveryProvider {
   label: string;
   configured: boolean;
   /** Customer fields that must be filled for this integration to work. */
   requiredFields: DeliveryField[];
   /**
-   * Whether this customer's pair for the competence is already there; detail
+   * Whether what is being sent for the competence is already there; detail
    * describes what was found (status, missing NFS-e...).
    */
   alreadySent(
     customer: DeliveryCustomer,
     competence: string,
+    parts: DeliveryParts,
   ): Promise<{ sent: boolean; raw: string; detail?: string }>;
   send(req: DeliveryRequest): Promise<{ raw: string }>;
 }

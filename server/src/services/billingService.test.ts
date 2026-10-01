@@ -414,6 +414,36 @@ describe("DeliveryService", () => {
     );
   });
 
+  it("sends only the chosen document and records it", async () => {
+    const { b } = await setup();
+    const seen: { nfse: boolean; slip: boolean }[] = [];
+    const { svc } = provider({
+      send: async (r) => {
+        seen.push({ nfse: !!r.nfsePdf, slip: !!r.slipPdf });
+        return { raw: "{}" };
+      },
+    });
+    await svc.send(b.id, "NFSE");
+    expect(seen).toEqual([{ nfse: true, slip: false }]);
+    expect(
+      (await db.delivery.findUniqueOrThrow({ where: { billingId: b.id } }))
+        .parts,
+    ).toBe("NFSE");
+  });
+
+  it("only needs the PDF of the chosen document", async () => {
+    const { b } = await setup();
+    await db.bankSlip.update({
+      where: { billingId: b.id },
+      data: { pdf: null },
+    });
+    const { svc, sent } = provider();
+    await expect(svc.send(b.id, "SLIP")).rejects.toThrow("PDF do boleto");
+    await expect(svc.send(b.id)).rejects.toThrow("PDF do boleto");
+    await svc.send(b.id, "NFSE");
+    expect(sent).toHaveLength(1);
+  });
+
   it("refuses customers without integration and pairs missing a PDF", async () => {
     const { b } = await setup(null);
     const { svc } = provider();

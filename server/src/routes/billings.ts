@@ -11,6 +11,9 @@ const create = z.object({
   dueDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   mode: z.enum(["AUTO", "NFSE", "SLIP", "BOTH"]).default("AUTO"),
 });
+const deliveryBody = z
+  .object({ parts: z.enum(["NFSE", "SLIP", "BOTH"]).default("BOTH") })
+  .default({ parts: "BOTH" });
 const idParam = z.object({ id: z.string() });
 const nfseQuery = z.object({
   number: z.string().trim().max(20).optional(),
@@ -32,7 +35,9 @@ export const billingRoutes =
       },
       invoice: { select: { number: true, accessKey: true, source: true } },
       bankSlip: { select: { linhaDigitavel: true, status: true } },
-      delivery: { select: { status: true, error: true, sentAt: true } },
+      delivery: {
+        select: { status: true, parts: true, error: true, sentAt: true },
+      },
     };
 
     // Flags which invoices and boletos have a PDF without loading the bytes of
@@ -126,12 +131,12 @@ export const billingRoutes =
       },
     );
 
-    // Sends the NFS-e + boleto pair through the customer's integration.
+    // Sends the NFS-e, the boleto or both through the customer's integration.
     app.post(
       "/billings/:id/delivery",
-      { schema: { params: idParam } },
+      { schema: { params: idParam, body: deliveryBody } },
       async (req) => {
-        await delivery.send(req.params.id);
+        await delivery.send(req.params.id, req.body.parts);
         return findOne(req.params.id);
       },
     );

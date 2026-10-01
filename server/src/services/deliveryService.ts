@@ -4,7 +4,7 @@ import {
   type DeliveryProviders,
   type IntegrationKey,
 } from "../integrations/delivery.js";
-import { DELIVERY_FIELDS } from "../integrations/types.js";
+import { DELIVERY_FIELDS, type DeliveryParts } from "../integrations/types.js";
 import { httpError } from "../lib/httpError.js";
 
 const msg = (e: unknown) => (e instanceof Error ? e.message : String(e));
@@ -31,11 +31,11 @@ export class DeliveryService {
   }
 
   /**
-   * Sends the NFS-e + boleto pair through the customer's integration. Checks
-   * the remote side first so a pair already there is not sent twice. The
-   * outcome is recorded either way; a failure can be retried.
+   * Sends the NFS-e, the boleto or both through the customer's integration.
+   * Checks the remote side first so what is already there is not sent twice.
+   * The outcome is recorded either way; a failure can be retried.
    */
-  async send(billingId: string) {
+  async send(billingId: string, parts: DeliveryParts = "BOTH") {
     const b = await this.db.billing.findUnique({
       where: { id: billingId },
       include: {
@@ -68,11 +68,18 @@ export class DeliveryService {
     if (b.delivery?.status === "SENT") {
       throw httpError(409, "Já enviado ao cliente");
     }
-    const nfsePdf = b.invoice && (await this.nfsePdf(billingId));
-    if (!nfsePdf) {
+    const nfsePdf =
+      parts === "SLIP"
+        ? undefined
+        : ((b.invoice && (await this.nfsePdf(billingId))) ?? undefined);
+    if (parts !== "SLIP" && !nfsePdf) {
       throw httpError(409, "Falta o PDF da NFS-e");
     }
-    if (!b.bankSlip?.pdf) {
+    const slipPdf =
+      parts === "NFSE" || !b.bankSlip?.pdf
+        ? undefined
+        : Buffer.from(b.bankSlip.pdf);
+    if (parts !== "NFSE" && !slipPdf) {
       throw httpError(409, "Falta o PDF do boleto");
     }
 
@@ -83,6 +90,7 @@ export class DeliveryService {
     }) => {
       const row = {
         integration: key,
+        parts,
         error: null,
         response: null,
         ...data,
@@ -96,7 +104,7 @@ export class DeliveryService {
     };
 
     try {
-      const check = await provider.alreadySent(b.customer, b.competence);
+      const check = await provider.alreadySent(b.customer, b.competence, parts);
       if (check.sent) {
         await record({
           status: "SENT",
@@ -111,7 +119,7 @@ export class DeliveryService {
         customer: b.customer,
         competence: b.competence,
         nfsePdf,
-        slipPdf: Buffer.from(b.bankSlip.pdf),
+        slipPdf,
       });
       await record({ status: "SENT", response: r.raw });
     } catch (e) {
