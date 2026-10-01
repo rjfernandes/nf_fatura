@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { api, brl, formatCnpj, type Billing, type BillingMode } from "../api";
+import NfseUploadDialog from "../components/NfseUploadDialog";
 import Table from "../components/Table";
 
 const badge: Record<Billing["status"], string> = {
@@ -47,6 +48,7 @@ export default function BillingPage() {
   const [competence, setCompetence] = useState(defaultCompetence);
   const [dueDate, setDueDate] = useState(defaultDueDate);
   const [mode, setMode] = useState<BillingMode>("AUTO");
+  const [uploadFor, setUploadFor] = useState<Billing | null>(null);
 
   const refresh = () => qc.invalidateQueries({ queryKey: ["billings"] });
   const generate = useMutation({
@@ -73,6 +75,23 @@ export default function BillingPage() {
     onSuccess: refresh,
     onError: (e) => alert((e as Error).message),
   });
+  const attachNfse = useMutation({
+    mutationFn: (v: { id: string; file: File; number: string }) =>
+      api.attachNfse(v.id, v.file, v.number || undefined),
+    onSuccess: () => {
+      setUploadFor(null);
+      refresh();
+    },
+  });
+  const removeNfse = useMutation({
+    mutationFn: api.deleteNfse,
+    onSuccess: refresh,
+    onError: (e) => alert((e as Error).message),
+  });
+  const openUpload = (b: Billing) => {
+    attachNfse.reset();
+    setUploadFor(b);
+  };
 
   const list = customers.data ?? [];
   const allSelected = list.length > 0 && selected.size === list.length;
@@ -238,23 +257,65 @@ export default function BillingPage() {
                   b.invoice ? (
                     <>
                       <span>{b.invoice.number ?? "—"}</span>
-                      <a
-                        className="text-indigo-600 hover:underline"
-                        href={`/api/billings/${b.id}/nfse.pdf`}
-                        target="_blank"
-                      >
-                        PDF
-                      </a>
-                      <a
-                        className="text-indigo-600 hover:underline"
-                        href={`/api/billings/${b.id}/nfse.xml`}
-                        target="_blank"
-                      >
-                        XML
-                      </a>
+                      {b.invoice.source === "MANUAL" && (
+                        <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-600">
+                          manual
+                        </span>
+                      )}
+                      {b.invoice.hasPdf ? (
+                        <a
+                          className="text-indigo-600 hover:underline"
+                          href={`/api/billings/${b.id}/nfse.pdf`}
+                          target="_blank"
+                        >
+                          PDF
+                        </a>
+                      ) : (
+                        <button
+                          onClick={() => openUpload(b)}
+                          className="text-indigo-600 hover:underline"
+                        >
+                          Anexar PDF
+                        </button>
+                      )}
+                      {b.invoice.source === "API" && (
+                        <a
+                          className="text-indigo-600 hover:underline"
+                          href={`/api/billings/${b.id}/nfse.xml`}
+                          target="_blank"
+                        >
+                          XML
+                        </a>
+                      )}
+                      {b.invoice.source === "MANUAL" && (
+                        <>
+                          <button
+                            onClick={() => openUpload(b)}
+                            className="text-indigo-600 hover:underline"
+                          >
+                            Substituir
+                          </button>
+                          <button
+                            onClick={() =>
+                              confirm(
+                                `Remover a NFS-e anexada de ${b.customer.name} (${b.competence})?`,
+                              ) && removeNfse.mutate(b.id)
+                            }
+                            disabled={removeNfse.isPending}
+                            className="text-red-600 hover:underline disabled:opacity-50"
+                          >
+                            Remover
+                          </button>
+                        </>
+                      )}
                     </>
                   ) : (
-                    "—"
+                    <button
+                      onClick={() => openUpload(b)}
+                      className="text-indigo-600 hover:underline"
+                    >
+                      Anexar
+                    </button>
                   ),
               },
               {
@@ -325,6 +386,15 @@ export default function BillingPage() {
             emptyMessage="Nenhum faturamento ainda."
           />
         </div>
+        <NfseUploadDialog
+          billing={uploadFor}
+          pending={attachNfse.isPending}
+          error={attachNfse.error}
+          onSubmit={(file, number) =>
+            uploadFor && attachNfse.mutate({ id: uploadFor.id, file, number })
+          }
+          onClose={() => setUploadFor(null)}
+        />
       </section>
     </div>
   );

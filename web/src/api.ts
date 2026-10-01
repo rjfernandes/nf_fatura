@@ -28,7 +28,12 @@ export interface Billing {
   error: string | null;
   createdAt: string;
   customer: { name: string; cnpj: string };
-  invoice: { number: string | null; accessKey: string | null } | null;
+  invoice: {
+    number: string | null;
+    accessKey: string | null;
+    source: "API" | "MANUAL";
+    hasPdf: boolean;
+  } | null;
   bankSlip: { linhaDigitavel: string | null; status: string | null } | null;
 }
 
@@ -55,10 +60,16 @@ async function call<T>(
   path: string,
   body?: unknown,
 ): Promise<T> {
+  // Files go as-is with their own content type; anything else as JSON.
   const res = await fetch(`/api${path}`, {
     method,
-    headers: body ? { "content-type": "application/json" } : undefined,
-    body: body ? JSON.stringify(body) : undefined,
+    headers:
+      body instanceof Blob
+        ? { "content-type": body.type }
+        : body
+          ? { "content-type": "application/json" }
+          : undefined,
+    body: body instanceof Blob ? body : body ? JSON.stringify(body) : undefined,
   });
   if (res.status === 204) {
     return undefined as T;
@@ -95,6 +106,14 @@ export const api = {
     call<{ billingRemoved: boolean }>("DELETE", `/billings/${id}/boleto`),
   deleteBilling: (id: string) => call<void>("DELETE", `/billings/${id}`),
   retry: (id: string) => call<Billing>("POST", `/billings/${id}/retry`),
+  attachNfse: (id: string, file: File, number?: string) =>
+    call<Billing>(
+      "PUT",
+      `/billings/${id}/nfse.pdf` +
+        (number ? `?number=${encodeURIComponent(number)}` : ""),
+      new Blob([file], { type: "application/pdf" }),
+    ),
+  deleteNfse: (id: string) => call<void>("DELETE", `/billings/${id}/nfse`),
 };
 
 export const brl = (cents: number) =>

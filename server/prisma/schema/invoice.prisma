@@ -7,4 +7,5 @@ model Invoice {
   xml       String?
   pdf       Bytes?
   raw       String?
+  source    String  @default("API") // API | MANUAL
 }

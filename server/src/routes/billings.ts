@@ -10,22 +10,60 @@ const create = z.object({
   mode: z.enum(["AUTO", "NFSE", "SLIP", "BOTH"]).default("AUTO"),
 });
 const idParam = z.object({ id: z.string() });
+const nfseQuery = z.object({
+  number: z.string().trim().max(20).optional(),
+});
+const MAX_PDF_BYTES = 10 * 1024 * 1024;
 
 export const billingRoutes =
   (service: BillingService): FastifyPluginAsyncZod =>
   async (app) => {
     const include = {
       customer: { select: { name: true, cnpj: true } },
-      invoice: { select: { number: true, accessKey: true } },
+      invoice: { select: { number: true, accessKey: true, source: true } },
       bankSlip: { select: { linhaDigitavel: true, status: true } },
     };
 
+    // Flags which invoices have a PDF without loading the bytes of each one.
+    const withPdfFlag = async <
+      T extends { id: string; invoice: object | null },
+    >(
+      billings: T[],
+    ) => {
+      const withPdf = await prisma.invoice.findMany({
+        where: {
+          billingId: { in: billings.map((b) => b.id) },
+          pdf: { not: null },
+        },
+        select: { billingId: true },
+      });
+      const ids = new Set(withPdf.map((i) => i.billingId));
+      return billings.map((b) => ({
+        ...b,
+        invoice: b.invoice && { ...b.invoice, hasPdf: ids.has(b.id) },
+      }));
+    };
+    const findOne = async (id: string) =>
+      (
+        await withPdfFlag([
+          await prisma.billing.findUniqueOrThrow({ where: { id }, include }),
+        ])
+      )[0];
+
+    app.addContentTypeParser(
+      "application/pdf",
+      { parseAs: "buffer", bodyLimit: MAX_PDF_BYTES },
+      (_req, body, done) => done(null, body),
+    );
+
     app.get("/billings", async () =>
-      prisma.billing.findMany({
-        orderBy: { createdAt: "desc" },
-        include,
-        take: 200,
-      }),
+      withPdfFlag(
+        await prisma.billing.findMany({
+          orderBy: { createdAt: "desc" },
+          include,
+          take: 200,
+        }),
+      ),
     );
 
     app.post("/billings", { schema: { body: create } }, async (req, reply) =>
@@ -37,10 +75,38 @@ export const billingRoutes =
       { schema: { params: idParam } },
       async (req) => {
         await service.process(req.params.id);
-        return prisma.billing.findUniqueOrThrow({
-          where: { id: req.params.id },
-          include,
-        });
+        return findOne(req.params.id);
+      },
+    );
+
+    // Attaches the PDF of an NFS-e issued outside the system. Body is the raw
+    // PDF (content-type: application/pdf).
+    app.put(
+      "/billings/:id/nfse.pdf",
+      { schema: { params: idParam, querystring: nfseQuery } },
+      async (req, reply) => {
+        const pdf = req.body;
+        if (
+          !Buffer.isBuffer(pdf) ||
+          pdf.subarray(0, 5).toString("latin1") !== "%PDF-"
+        ) {
+          return reply.code(400).send({ message: "Envie um arquivo PDF" });
+        }
+        await service.attachNfsePdf(
+          req.params.id,
+          pdf,
+          req.query.number || undefined,
+        );
+        return findOne(req.params.id);
+      },
+    );
+
+    app.delete(
+      "/billings/:id/nfse",
+      { schema: { params: idParam } },
+      async (req, reply) => {
+        await service.removeManualNfse(req.params.id);
+        return reply.code(204).send();
       },
     );
 
