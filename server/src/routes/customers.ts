@@ -26,6 +26,7 @@ const body = z.object({
     .string()
     .transform(onlyDigits)
     .pipe(z.string().length(8, "CEP inválido")),
+  nickName: z.string().trim().nullish(),
   recurringValue: z.number().int().nonnegative(), // cents
   hasBankSlip: z.boolean(),
 });

@@ -33,6 +33,7 @@ const empty: FormValues = {
   cityIbgeCode: "",
   state: "",
   zipcode: "",
+  nickName: "",
   recurringValue: "",
   hasBankSlip: false,
 };
@@ -78,6 +79,7 @@ function CustomerForm({
           zipcode: maskCep(initial.zipcode),
           addressComplement: initial.addressComplement ?? "",
           cityIbgeCode: initial.cityIbgeCode ?? "",
+          nickName: initial.nickName ?? "",
           recurringValue: centsToMasked(initial.recurringValue),
         }
       : empty,
@@ -90,6 +92,7 @@ function CustomerForm({
         ...v,
         addressComplement: v.addressComplement || null,
         cityIbgeCode: v.cityIbgeCode || null,
+        nickName: v.nickName || null,
         recurringValue: moneyToCents(v.recurringValue),
       };
       return initial
@@ -133,6 +136,9 @@ function CustomerForm({
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-6">
         <Field label="Nome" className="sm:col-span-4">
           <input className={input} required {...register("name")} />
+        </Field>
+        <Field label="Apelido" className="sm:col-span-2">
+          <input className={input} {...register("nickName")} />
         </Field>
         <Field label="CNPJ" className="sm:col-span-2">
           <input
@@ -262,7 +268,7 @@ export default function CustomersPage() {
     onError: (e: Error) => alert(e.message),
   });
   const list = data.filter((c) =>
-    (c.name + c.cnpj).toLowerCase().includes(q.toLowerCase()),
+    (c.name + (c.nickName ?? "") + c.cnpj).toLowerCase().includes(q.toLowerCase()),
   );
 
   return (
@@ -271,7 +277,7 @@ export default function CustomersPage() {
         <input
           value={q}
           onChange={(e) => setQ(e.target.value)}
-          placeholder="Buscar por nome ou CNPJ"
+          placeholder="Buscar por nome, apelido ou CNPJ"
           className={`${input} mt-0 max-w-sm`}
         />
         <button
@@ -295,6 +301,7 @@ export default function CustomersPage() {
               label: "Nome",
               field: (c) => <span className="font-medium">{c.name}</span>,
             },
+            { label: "Apelido", field: (c) => c.nickName ?? "—" },
             { label: "CNPJ", field: (c) => formatCnpj(c.cnpj) },
             { label: "Cidade/UF", field: (c) => `${c.city}/${c.state}` },
             {

@@ -80,11 +80,11 @@ export class NfseNacionalProvider implements NfseProvider {
       ...input,
       dpsNumber: input.dpsNumber + this.env.NFSE_DPS_OFFSET,
     };
-    const xml = signDps(
-      buildDpsXml(cfg, req),
-      dpsId(cfg, req.dpsNumber),
-      material,
-    );
+    // SEFIN rejects (E1229) a DPS without an explicit UTF-8 declaration. It is
+    // added after signing; canonicalization ignores the declaration.
+    const xml =
+      '<?xml version="1.0" encoding="UTF-8"?>' +
+      signDps(buildDpsXml(cfg, req), dpsId(cfg, req.dpsNumber), material);
 
     const res = await request(`${urls.sefin}/nfse`, {
       method: "POST",

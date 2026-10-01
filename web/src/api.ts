@@ -10,6 +10,7 @@ export interface Customer {
   cityIbgeCode: string | null;
   state: string;
   zipcode: string;
+  nickName: string | null;
   recurringValue: number; // cents
   hasBankSlip: boolean;
 }
@@ -27,7 +28,7 @@ export interface Billing {
   status: "PENDING" | "NFSE_ISSUED" | "COMPLETED" | "FAILED";
   error: string | null;
   createdAt: string;
-  customer: { name: string; cnpj: string };
+  customer: { name: string; nickName: string | null; cnpj: string };
   invoice: {
     number: string | null;
     accessKey: string | null;

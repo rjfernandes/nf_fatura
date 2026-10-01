@@ -19,7 +19,7 @@ export const billingRoutes =
   (service: BillingService): FastifyPluginAsyncZod =>
   async (app) => {
     const include = {
-      customer: { select: { name: true, cnpj: true } },
+      customer: { select: { name: true, nickName: true, cnpj: true } },
       invoice: { select: { number: true, accessKey: true, source: true } },
       bankSlip: { select: { linhaDigitavel: true, status: true } },
     };

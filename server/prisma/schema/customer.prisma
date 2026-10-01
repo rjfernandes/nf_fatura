@@ -10,6 +10,7 @@ model Customer {
   cityIbgeCode      String?
   state             String
   zipcode           String
+  nickName          String?
   recurringValue    Int // cents
   hasBankSlip       Boolean   @default(false)
   createdAt         DateTime  @default(now())

@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { api, brl, formatCnpj, type Billing, type BillingMode } from "../api";
+import ActionButton, { ActionLink } from "../components/ActionButton";
 import NfseUploadDialog from "../components/NfseUploadDialog";
 import Table from "../components/Table";
 
@@ -37,6 +38,41 @@ const defaultDueDate = `${dueDay.getFullYear()}-${String(dueDay.getMonth() + 1).
 const competenceDate = new Date(dueDay.getFullYear(), dueDay.getMonth() - 1, 1);
 const defaultCompetence = `${competenceDate.getFullYear()}-${String(competenceDate.getMonth() + 1).padStart(2, "0")}`;
 
+// boleto_<competence>_<nickname, or the initials of the company name>.pdf
+const slipFileName = (b: Billing) => {
+  const { nickName, name } = b.customer;
+  const who =
+    nickName?.trim() ||
+    name
+      .split(/\s+/)
+      .map((w) => w[0])
+      .join("")
+      .toUpperCase();
+  return `${`boleto_${b.competence}_${who}`.replace(/\W+/g, "_").toLowerCase()}.pdf`;
+};
+
+// Long errors (e.g. an HTML 502 page) are clamped, with a toggle to read all.
+function ErrorText({ text }: { text: string }) {
+  const [open, setOpen] = useState(false);
+  const long = text.length > 140;
+  return (
+    <div className="mt-1 max-w-xs text-xs text-red-600">
+      <p className={`wrap-break-word ${long && !open ? "line-clamp-2" : ""}`}>
+        {text}
+      </p>
+      {long && (
+        <button
+          type="button"
+          onClick={() => setOpen(!open)}
+          className="mt-0.5 font-medium underline"
+        >
+          {open ? "ver menos" : "ver mais"}
+        </button>
+      )}
+    </div>
+  );
+}
+
 export default function BillingPage() {
   const qc = useQueryClient();
   const customers = useQuery({
@@ -50,21 +86,59 @@ export default function BillingPage() {
   const [mode, setMode] = useState<BillingMode>("AUTO");
   const [uploadFor, setUploadFor] = useState<Billing | null>(null);
 
+  // Returned so mutations stay pending until the history has been refetched.
   const refresh = () => qc.invalidateQueries({ queryKey: ["billings"] });
+  const [progress, setProgress] = useState<{ done: number; total: number }>();
+  // One request per customer, refreshing the history as each one finishes.
   const generate = useMutation({
-    mutationFn: () =>
-      api.createBillings({
-        customerIds: [...selected],
-        competence,
-        dueDate,
-        mode,
-      }),
-    onSuccess: () => {
-      setSelected(new Set());
-      refresh();
+    mutationFn: async () => {
+      const ids = [...selected];
+      const failures: string[] = [];
+      for (const [i, customerId] of ids.entries()) {
+        setProgress({ done: i, total: ids.length });
+        try {
+          await api.createBillings({
+            customerIds: [customerId],
+            competence,
+            dueDate,
+            mode,
+          });
+        } catch (e) {
+          failures.push((e as Error).message);
+        }
+        setSelected((s) => {
+          const n = new Set(s);
+          n.delete(customerId);
+          return n;
+        });
+        await refresh();
+      }
+      if (failures.length) {
+        throw new Error(failures.join("; "));
+      }
     },
+    onSettled: () => setProgress(undefined),
   });
-  const retry = useMutation({ mutationFn: api.retry, onSuccess: refresh });
+  const [retrying, setRetrying] = useState<Set<string>>(new Set());
+  const markRetrying = (id: string, on: boolean) =>
+    setRetrying((r) => {
+      const n = new Set(r);
+      on ? n.add(id) : n.delete(id);
+      return n;
+    });
+  const retry = useMutation({
+    mutationFn: async (id: string) => {
+      markRetrying(id, true);
+      try {
+        return await api.retry(id);
+      } finally {
+        // Keep "Processando" until the refreshed history is in.
+        await refresh();
+        markRetrying(id, false);
+      }
+    },
+    onError: (e) => alert((e as Error).message),
+  });
   const removeSlip = useMutation({
     mutationFn: api.deleteSlip,
     onSuccess: refresh,
@@ -177,6 +251,7 @@ export default function BillingPage() {
               label: "Cliente",
               field: (c) => <span className="font-medium">{c.name}</span>,
             },
+            { label: "Apelido", field: (c) => c.nickName ?? "—" },
             { label: "CNPJ", field: (c) => formatCnpj(c.cnpj) },
             {
               label: "Valor",
@@ -199,7 +274,7 @@ export default function BillingPage() {
             className="rounded-md bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50"
           >
             {generate.isPending
-              ? "Gerando..."
+              ? `Gerando ${Math.min((progress?.done ?? 0) + 1, progress?.total ?? 1)}/${progress?.total ?? selected.size}...`
               : `${modeOptions.find((o) => o.value === mode)!.button} (${selected.size})`}
           </button>
           <span className="text-sm text-slate-600">Total: {brl(total)}</span>
@@ -224,9 +299,17 @@ export default function BillingPage() {
               {
                 label: "Cliente",
                 field: (b) => (
-                  <span className="font-medium">{b.customer.name}</span>
+                  <>
+                    {b.customer.nickName && (
+                      <span className="block text-xs font-bold">
+                        {b.customer.nickName}
+                      </span>
+                    )}
+                    <span className="font-medium">{b.customer.name}</span>
+                  </>
                 ),
               },
+
               { label: "Comp.", field: "competence" },
               {
                 label: "Valor",
@@ -235,20 +318,21 @@ export default function BillingPage() {
               },
               {
                 label: "Status",
-                field: (b) => (
-                  <>
-                    <span
-                      className={`rounded-full px-2 py-0.5 text-xs font-medium ${badge[b.status]}`}
-                    >
-                      {label[b.status]}
+                field: (b) =>
+                  retrying.has(b.id) ? (
+                    <span className="rounded-full bg-orange-100 px-2 py-0.5 text-xs font-medium text-orange-800">
+                      Processando
                     </span>
-                    {b.error && (
-                      <p className="mt-1 max-w-xs wrap-break-words text-xs text-red-600">
-                        {b.error}
-                      </p>
-                    )}
-                  </>
-                ),
+                  ) : (
+                    <>
+                      <span
+                        className={`rounded-full px-2 py-0.5 text-xs font-medium ${badge[b.status]}`}
+                      >
+                        {label[b.status]}
+                      </span>
+                      {b.error && <ErrorText text={b.error} />}
+                    </>
+                  ),
               },
               {
                 label: "NFS-e",
@@ -263,59 +347,41 @@ export default function BillingPage() {
                         </span>
                       )}
                       {b.invoice.hasPdf ? (
-                        <a
-                          className="text-indigo-600 hover:underline"
-                          href={`/api/billings/${b.id}/nfse.pdf`}
-                          target="_blank"
-                        >
+                        <ActionLink href={`/api/billings/${b.id}/nfse.pdf`}>
                           PDF
-                        </a>
+                        </ActionLink>
                       ) : (
-                        <button
-                          onClick={() => openUpload(b)}
-                          className="text-indigo-600 hover:underline"
-                        >
+                        <ActionButton onClick={() => openUpload(b)}>
                           Anexar PDF
-                        </button>
+                        </ActionButton>
                       )}
                       {b.invoice.source === "API" && (
-                        <a
-                          className="text-indigo-600 hover:underline"
-                          href={`/api/billings/${b.id}/nfse.xml`}
-                          target="_blank"
-                        >
+                        <ActionLink href={`/api/billings/${b.id}/nfse.xml`}>
                           XML
-                        </a>
+                        </ActionLink>
                       )}
                       {b.invoice.source === "MANUAL" && (
                         <>
-                          <button
-                            onClick={() => openUpload(b)}
-                            className="text-indigo-600 hover:underline"
-                          >
+                          <ActionButton onClick={() => openUpload(b)}>
                             Substituir
-                          </button>
-                          <button
+                          </ActionButton>
+                          <ActionButton
+                            variant="danger"
                             onClick={() =>
                               confirm(
                                 `Remover a NFS-e anexada de ${b.customer.name} (${b.competence})?`,
-                              ) && removeNfse.mutate(b.id)
+                              ) && removeNfse.mutateAsync(b.id)
                             }
-                            disabled={removeNfse.isPending}
-                            className="text-red-600 hover:underline disabled:opacity-50"
                           >
                             Remover
-                          </button>
+                          </ActionButton>
                         </>
                       )}
                     </>
                   ) : (
-                    <button
-                      onClick={() => openUpload(b)}
-                      className="text-indigo-600 hover:underline"
-                    >
+                    <ActionButton onClick={() => openUpload(b)}>
                       Anexar
-                    </button>
+                    </ActionButton>
                   ),
               },
               {
@@ -324,27 +390,28 @@ export default function BillingPage() {
                 field: (b) =>
                   b.bankSlip ? (
                     <>
-                      <a
-                        className="text-indigo-600 hover:underline"
-                        href={`/api/billings/${b.id}/boleto.pdf`}
-                        target="_blank"
-                      >
+                      <ActionLink href={`/api/billings/${b.id}/boleto.pdf`}>
                         PDF
-                      </a>
-                      <button
+                      </ActionLink>
+                      <ActionLink
+                        href={`/api/billings/${b.id}/boleto.pdf`}
+                        download={slipFileName(b)}
+                      >
+                        Baixar
+                      </ActionLink>
+                      <ActionButton
+                        variant="danger"
                         onClick={() =>
                           confirm(
                             `Cancelar o boleto de ${b.customer.name} (${b.competence}) no Banco Inter? Essa ação não pode ser desfeita.` +
                               (b.invoice
                                 ? " A NFS-e emitida será mantida no histórico."
                                 : " O faturamento também será removido do histórico."),
-                          ) && removeSlip.mutate(b.id)
+                          ) && removeSlip.mutateAsync(b.id)
                         }
-                        disabled={removeSlip.isPending}
-                        className="text-red-600 hover:underline disabled:opacity-50"
                       >
                         Excluir
-                      </button>
+                      </ActionButton>
                     </>
                   ) : (
                     "—"
@@ -356,25 +423,20 @@ export default function BillingPage() {
                 field: (b) =>
                   b.status === "FAILED" && (
                     <>
-                      <button
-                        onClick={() => retry.mutate(b.id)}
-                        disabled={retry.isPending}
-                        className="text-indigo-600 hover:underline disabled:opacity-50"
-                      >
+                      <ActionButton onClick={() => retry.mutateAsync(b.id)}>
                         Tentar novamente
-                      </button>
+                      </ActionButton>
                       {!b.invoice && !b.bankSlip && (
-                        <button
+                        <ActionButton
+                          variant="danger"
                           onClick={() =>
                             confirm(
                               `Remover o faturamento de ${b.customer.name} (${b.competence})?`,
-                            ) && remove.mutate(b.id)
+                            ) && remove.mutateAsync(b.id)
                           }
-                          disabled={remove.isPending}
-                          className="text-red-600 hover:underline disabled:opacity-50"
                         >
                           Remover
-                        </button>
+                        </ActionButton>
                       )}
                     </>
                   ),
