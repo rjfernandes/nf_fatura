@@ -80,12 +80,11 @@ export class CamimDeliveryProvider implements DeliveryProvider {
     if (!req.customer.station) {
       throw new Error("Camim: cliente sem posto");
     }
-    const form = new FormData();
-    form.append("competencia", req.competence);
-    form.append("posto", req.customer.station);
     if (!req.slipPdf && !req.nfsePdf) {
       throw new Error("Camim: nada para enviar");
     }
+    const form = new FormData();
+    form.append("posto", req.customer.station);
     const pdf = (buf: Buffer) =>
       new Blob([new Uint8Array(buf)], { type: "application/pdf" });
     if (req.slipPdf) {
@@ -98,7 +97,15 @@ export class CamimDeliveryProvider implements DeliveryProvider {
         `nfse-${req.competence}.pdf`,
       );
     }
-    const raw = await this.call(this.url, {
+    // Both files: the pair route. One file alone: its own route under the competence.
+    let url = this.url;
+    if (req.slipPdf && req.nfsePdf) {
+      form.append("competencia", req.competence);
+    } else {
+      const competence = encodeURIComponent(req.competence);
+      url += `${competence}/${req.slipPdf ? "boleto" : "nota"}/`;
+    }
+    const raw = await this.call(url, {
       method: "POST",
       headers: this.headers(),
       body: form,
