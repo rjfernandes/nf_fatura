@@ -33,6 +33,7 @@ export interface ImportedNfse {
   number: string;
   xml: string;
   issuedAt: string; // dhEmi as written in the XML, e.g. 2026-09-30T23:50:00-03:00
+  competence: string; // YYYY-MM, the note's own competence (dCompet)
   takerTaxId: string;
   takerName?: string;
   takerAddress?: {

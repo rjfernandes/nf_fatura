@@ -10,6 +10,7 @@ const note: ImportedNfse = {
   number: "10",
   xml: "<x/>",
   issuedAt: "2026-09-30T23:50:00-03:00",
+  competence: "2026-09",
   takerTaxId: "11222333000181",
   takerName: "Acme",
   amountCents: 5000,

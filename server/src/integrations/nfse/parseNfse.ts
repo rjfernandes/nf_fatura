@@ -21,11 +21,13 @@ export function parseNfse(
   const taker = dps.toma ?? {};
   const emit = inf.emit ?? {};
   const value = inf.valores?.vLiq ?? dps.valores?.vServPrest?.vServ ?? "0";
+  const issuedAt = String(dps.dhEmi ?? inf.dhProc);
   return {
     accessKey: String(inf["@_Id"] ?? "").replace(/^NFS/, ""),
     number: String(inf.nNFSe ?? ""),
     xml,
-    issuedAt: String(dps.dhEmi ?? inf.dhProc),
+    issuedAt,
+    competence: String(dps.dCompet ?? issuedAt).slice(0, 7),
     takerTaxId: String(taker.CNPJ ?? taker.CPF ?? ""),
     takerName: taker.xNome ? String(taker.xNome) : undefined,
     takerAddress: {

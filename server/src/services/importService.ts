@@ -167,7 +167,7 @@ export class ImportService {
     result: ImportResult,
   ) {
     const date = n.issuedAt.slice(0, 10);
-    const competence = date.slice(0, 7);
+    const competence = n.competence;
     const invoice = {
       number: n.number,
       accessKey: n.accessKey,
