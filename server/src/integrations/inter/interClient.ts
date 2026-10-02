@@ -1,4 +1,9 @@
-import type { SlipProvider, SlipRequest, SlipResult } from "../types.js";
+import type {
+  ImportedSlip,
+  SlipProvider,
+  SlipRequest,
+  SlipResult,
+} from "../types.js";
 import type { InterApi } from "./interApi.js";
 
 const SCOPE = "boleto-cobranca.read boleto-cobranca.write";
@@ -9,6 +14,64 @@ export class InterSlipProvider implements SlipProvider {
 
   private api<T>(method: "GET" | "POST", path: string, body?: unknown) {
     return this.inter.call<T>(SCOPE, method, path, body);
+  }
+
+  async list(from: string, to: string, known: Set<string>) {
+    const slips: ImportedSlip[] = [];
+    let pages = 1;
+    for (let page = 0; page < pages; page++) {
+      const q = new URLSearchParams({
+        dataInicial: from,
+        dataFinal: to,
+        filtrarDataPor: "VENCIMENTO",
+        paginaAtual: String(page),
+      });
+      const res = await this.api<{ totalPaginas?: number; cobrancas?: any[] }>(
+        "GET",
+        `/cobranca/v3/cobrancas?${q}`,
+      );
+      pages = res.totalPaginas ?? 1;
+      for (const { cobranca: c, boleto: b } of res.cobrancas ?? []) {
+        if (c.situacao === "CANCELADO") {
+          continue;
+        }
+        const p = c.pagador ?? {};
+        let pdf: Buffer | undefined;
+        if (!known.has(c.codigoSolicitacao)) {
+          try {
+            const r = await this.api<{ pdf: string }>(
+              "GET",
+              `/cobranca/v3/cobrancas/${c.codigoSolicitacao}/pdf`,
+            );
+            pdf = Buffer.from(r.pdf, "base64");
+          } catch {
+            /* the boleto is imported without PDF */
+          }
+        }
+        slips.push({
+          codigoSolicitacao: c.codigoSolicitacao,
+          nossoNumero: b?.nossoNumero,
+          linhaDigitavel: b?.linhaDigitavel,
+          barcode: b?.codigoBarras,
+          status: c.situacao,
+          dueDate: c.dataVencimento,
+          amountCents: Math.round(Number(c.valorNominal) * 100),
+          pdf,
+          payer: {
+            taxId: String(p.cpfCnpj ?? ""),
+            name: p.nome ?? "",
+            address: p.endereco,
+            number: p.numero,
+            complement: p.complemento || undefined,
+            neighborhood: p.bairro,
+            city: p.cidade,
+            state: p.uf,
+            zipcode: p.cep,
+          },
+        });
+      }
+    }
+    return slips;
   }
 
   async cancel(codigoSolicitacao: string, reason: string): Promise<void> {

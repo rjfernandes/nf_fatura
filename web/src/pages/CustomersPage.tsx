@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useForm } from "react-hook-form";
+import { FiEdit2, FiTrash2 } from "react-icons/fi";
 import {
   api,
   brl,
@@ -10,6 +11,7 @@ import {
   type CustomerInput,
   type IntegrationKey,
 } from "../api";
+import ActionButton from "../components/ActionButton";
 import Table from "../components/Table";
 import {
   centsToMasked,
@@ -95,6 +97,9 @@ function CustomerForm({
       : empty,
   });
   const [cepMsg, setCepMsg] = useState("");
+  const [cnpjMsg, setCnpjMsg] = useState("");
+  const lastCnpj = useRef("");
+  const cnpjTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
   const integrations = useQuery({
     queryKey: ["integrations"],
     queryFn: api.integrations,
@@ -120,6 +125,48 @@ function CustomerForm({
       onDone();
     },
   });
+
+  async function lookupCnpj(masked: string) {
+    lastCnpj.current = masked;
+    setCnpjMsg("Buscando...");
+    try {
+      const res = await fetch(
+        `https://brasilapi.com.br/api/cnpj/v1/${masked.replace(/\D/g, "")}`,
+      );
+      // The CNPJ was edited while waiting: this answer is stale.
+      if (lastCnpj.current !== masked) {
+        return;
+      }
+      if (res.status === 404) {
+        return setCnpjMsg("não encontrado");
+      }
+      if (!res.ok) {
+        return setCnpjMsg("falha ao consultar");
+      }
+      const d = await res.json();
+      const name: string = d.razao_social ?? "";
+      setValue("name", name);
+      // First word of the company name, e.g. "BANCO DO BRASIL SA" -> "Banco".
+      const first = name.split(/\s+/)[0] ?? "";
+      setValue(
+        "nickName",
+        first.charAt(0).toUpperCase() + first.slice(1).toLowerCase(),
+      );
+      setValue("address", d.logradouro ?? "");
+      setValue("addressNumber", d.numero ?? "");
+      setValue("addressComplement", d.complemento ?? "");
+      setValue("neighborhood", d.bairro ?? "");
+      setValue("zipcode", maskCep(String(d.cep ?? "")));
+      setValue("city", d.municipio ?? "");
+      setValue("state", d.uf ?? "");
+      setValue("cityIbgeCode", String(d.codigo_municipio_ibge ?? ""));
+      setCnpjMsg("");
+    } catch {
+      if (lastCnpj.current === masked) {
+        setCnpjMsg("falha ao consultar");
+      }
+    }
+  }
 
   async function lookupCep(cep: string) {
     setCepMsg("Buscando CEP...");
@@ -150,13 +197,10 @@ function CustomerForm({
         {initial ? "Editar cliente" : "Novo cliente"}
       </h2>
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-6">
-        <Field label="Nome" className="sm:col-span-4">
-          <input className={input} required {...register("name")} />
-        </Field>
-        <Field label="Apelido" className="sm:col-span-2">
-          <input className={input} {...register("nickName")} />
-        </Field>
-        <Field label="CNPJ" className="sm:col-span-2">
+        <Field
+          label={`CNPJ ${cnpjMsg ? `— ${cnpjMsg}` : ""}`}
+          className="sm:col-span-2"
+        >
           <input
             className={`${input} ${errors.cnpj ? "border-red-500" : ""}`}
             required
@@ -164,10 +208,21 @@ function CustomerForm({
             autoCapitalize="characters"
             {...register("cnpj", {
               validate: (v) => isValidCnpjInput(v) || "CNPJ inválido",
-              onChange: (e) =>
-                setValue("cnpj", maskCnpj(e.target.value), {
-                  shouldValidate: !!errors.cnpj,
-                }),
+              onChange: (e) => {
+                const m = maskCnpj(e.target.value);
+                setValue("cnpj", m, { shouldValidate: !!errors.cnpj });
+                setCnpjMsg("");
+                clearTimeout(cnpjTimer.current);
+                lastCnpj.current = "";
+                // Only digits: the alphanumeric CNPJ is not in the API yet.
+                if (
+                  !initial &&
+                  /^[\d./-]{18}$/.test(m) &&
+                  isValidCnpjInput(m)
+                ) {
+                  cnpjTimer.current = setTimeout(() => lookupCnpj(m), 200);
+                }
+              },
             })}
           />
           {errors.cnpj && (
@@ -175,6 +230,12 @@ function CustomerForm({
               {errors.cnpj.message}
             </span>
           )}
+        </Field>
+        <Field label="Nome" className="sm:col-span-4">
+          <input className={input} required {...register("name")} />
+        </Field>
+        <Field label="Apelido" className="sm:col-span-2">
+          <input className={input} {...register("nickName")} />
         </Field>
         <Field
           label={`CEP ${cepMsg ? `— ${cepMsg}` : ""}`}
@@ -385,24 +446,22 @@ export default function CustomersPage() {
             },
             {
               label: "",
-              className: "space-x-3 text-right",
+              className: "text-right",
               field: (c) => (
-                <>
-                  <button
-                    onClick={() => setEditing(c)}
-                    className="text-indigo-600 hover:underline"
-                  >
-                    Editar
-                  </button>
-                  <button
+                <div className="flex justify-end gap-2">
+                  <ActionButton title="Editar" onClick={() => setEditing(c)}>
+                    <FiEdit2 />
+                  </ActionButton>
+                  <ActionButton
+                    variant="danger"
+                    title="Excluir"
                     onClick={() =>
                       confirm(`Excluir ${c.name}?`) && remove.mutate(c.id)
                     }
-                    className="text-red-600 hover:underline"
                   >
-                    Excluir
-                  </button>
-                </>
+                    <FiTrash2 />
+                  </ActionButton>
+                </div>
               ),
             },
           ]}

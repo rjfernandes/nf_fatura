@@ -68,7 +68,7 @@ export interface Billing {
   invoice: {
     number: string | null;
     accessKey: string | null;
-    source: "API" | "MANUAL";
+    source: "API" | "MANUAL" | "IMPORTED";
     hasPdf: boolean;
   } | null;
   bankSlip: {
@@ -152,6 +152,14 @@ export const api = {
   deleteSlip: (id: string) =>
     call<{ billingRemoved: boolean }>("DELETE", `/billings/${id}/boleto`),
   deleteBilling: (id: string) => call<void>("DELETE", `/billings/${id}`),
+  importDocuments: (from: "nfse" | "slips") =>
+    call<{
+      imported: number;
+      linked: number;
+      duplicates: number;
+      createdCustomers: number;
+      skipped: { ref: string; taxId: string; name?: string }[];
+    }>("POST", `/billings/import-${from}`),
   retry: (id: string) => call<Billing>("POST", `/billings/${id}/retry`),
   attachNfse: (id: string, file: File, number?: string) =>
     call<Billing>(

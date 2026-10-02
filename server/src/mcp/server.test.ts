@@ -39,12 +39,14 @@ const account = {
 
 const db = createPrisma("file:./prisma/test.db");
 const nfse: NfseProvider = {
+  list: async () => [],
   issue: async () => ({
     number: "7",
     pdf: Buffer.from("%PDF-nfse"),
   }),
 };
 const slip: SlipProvider = {
+  list: async () => [],
   create: async () => ({
     codigoSolicitacao: "n",
     linhaDigitavel: "999",

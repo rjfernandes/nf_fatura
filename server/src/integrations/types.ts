@@ -27,8 +27,29 @@ export interface NfseResult {
   raw?: string;
 }
 
+/** An NFS-e already issued by the company, read back from the portal. */
+export interface ImportedNfse {
+  accessKey: string;
+  number: string;
+  xml: string;
+  issuedAt: string; // dhEmi as written in the XML, e.g. 2026-09-30T23:50:00-03:00
+  takerTaxId: string;
+  takerName?: string;
+  takerAddress?: {
+    address?: string;
+    number?: string;
+    complement?: string;
+    neighborhood?: string;
+    cityIbgeCode?: string;
+    zipcode?: string;
+  };
+  amountCents: number;
+}
+
 export interface NfseProvider {
   issue(req: NfseRequest): Promise<NfseResult>;
+  /** NFS-e issued by the company, as the portal's DF-e distribution lists them. */
+  list(): Promise<ImportedNfse[]>;
 }
 
 export interface SlipRequest {
@@ -47,7 +68,35 @@ export interface SlipResult {
   status?: string;
 }
 
+/** A boleto already registered at the bank. */
+export interface ImportedSlip {
+  codigoSolicitacao: string;
+  nossoNumero?: string;
+  linhaDigitavel?: string;
+  barcode?: string;
+  status?: string;
+  dueDate: string; // YYYY-MM-DD
+  amountCents: number;
+  pdf?: Buffer;
+  payer: {
+    taxId: string;
+    name: string;
+    address?: string;
+    number?: string;
+    complement?: string;
+    neighborhood?: string;
+    city?: string;
+    state?: string;
+    zipcode?: string;
+  };
+}
+
 export interface SlipProvider {
+  /**
+   * Boletos due between two dates (YYYY-MM-DD), cancelled ones left out. The
+   * PDF is only downloaded for codes not in `known`.
+   */
+  list(from: string, to: string, known: Set<string>): Promise<ImportedSlip[]>;
   create(req: SlipRequest): Promise<SlipResult>;
   /**
    * Cancels the boleto at the bank; throws if the bank refuses (e.g. already

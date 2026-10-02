@@ -44,6 +44,7 @@ describe("BillingService", () => {
     const svc = new BillingService(
       db,
       {
+        list: async () => [],
         issue: async (r) => {
           if (r.customer.name === "Bad") {
             throw new Error("boom");
@@ -52,6 +53,7 @@ describe("BillingService", () => {
         },
       },
       {
+        list: async () => [],
         create: async () => {
           slips++;
           return { codigoSolicitacao: "abc" };
@@ -93,12 +95,14 @@ describe("BillingService", () => {
       const svc = new BillingService(
         db,
         {
+          list: async () => [],
           issue: async () => {
             issued++;
             return { number: "1" };
           },
         },
         {
+          list: async () => [],
           create: async () => {
             slips++;
             return { codigoSolicitacao: "a" };
@@ -126,12 +130,14 @@ describe("BillingService", () => {
     const svc = new BillingService(
       db,
       {
+        list: async () => [],
         issue: async () => {
           issued++;
           return { number: "9" };
         },
       },
       {
+        list: async () => [],
         create: async () => {
           if (fail) {
             throw new Error("inter down");
@@ -163,8 +169,9 @@ describe("BillingService", () => {
     let refuse = true;
     const svc = new BillingService(
       db,
-      { issue: async () => ({ number: "1" }) },
+      { list: async () => [], issue: async () => ({ number: "1" }) },
       {
+        list: async () => [],
         create: async () => ({ codigoSolicitacao: "cod1" }),
         cancel: async (cod) => {
           if (refuse) {
@@ -198,8 +205,9 @@ describe("BillingService", () => {
     });
     const svc = new BillingService(
       db,
-      { issue: async () => ({ number: "1" }) },
+      { list: async () => [], issue: async () => ({ number: "1" }) },
       {
+        list: async () => [],
         create: async () => ({ codigoSolicitacao: "cod2" }),
         cancel: async () => {},
       },
@@ -223,8 +231,9 @@ describe("BillingService", () => {
       });
       const svc = new BillingService(
         db,
-        { issue: async () => ({ number: "1" }) },
+        { list: async () => [], issue: async () => ({ number: "1" }) },
         {
+          list: async () => [],
           create: async () => ({ codigoSolicitacao: "a" }),
           cancel: async () => {},
         },
@@ -264,6 +273,7 @@ describe("BillingService", () => {
       const svc = new BillingService(
         db,
         {
+          list: async () => [],
           issue: async () => {
             issued++;
             if (fail) {
@@ -273,6 +283,7 @@ describe("BillingService", () => {
           },
         },
         {
+          list: async () => [],
           create: async () => ({ codigoSolicitacao: "f" }),
           cancel: async () => {},
         },
@@ -306,8 +317,12 @@ describe("BillingService", () => {
       });
       const svc = new BillingService(
         db,
-        { issue: async () => ({ number: "7", xml: "<x/>" }) },
         {
+          list: async () => [],
+          issue: async () => ({ number: "7", xml: "<x/>" }),
+        },
+        {
+          list: async () => [],
           create: async () => ({ codigoSolicitacao: "p" }),
           cancel: async () => {},
         },
@@ -354,8 +369,9 @@ describe("DeliveryService", () => {
     });
     const billing = new BillingService(
       db,
-      { issue: async () => ({ number: "1", pdf }) },
+      { list: async () => [], issue: async () => ({ number: "1", pdf }) },
       {
+        list: async () => [],
         create: async () => ({ codigoSolicitacao: "d", pdf }),
         cancel: async () => {},
       },
@@ -384,8 +400,9 @@ describe("DeliveryService", () => {
     // Only nfsePdf is used; the providers are never called.
     const billing = new BillingService(
       db,
-      { issue: async () => ({}) },
+      { list: async () => [], issue: async () => ({}) },
       {
+        list: async () => [],
         create: async () => ({ codigoSolicitacao: "" }),
         cancel: async () => {},
       },

@@ -187,6 +187,10 @@ export default function BillingPage() {
     },
     onError: (e) => alert((e as Error).message),
   });
+  const importDocs = useMutation({
+    mutationFn: api.importDocuments,
+    onSuccess: refresh,
+  });
   const removeSlip = useMutation({
     mutationFn: api.deleteSlip,
     onSuccess: refresh,
@@ -355,7 +359,54 @@ export default function BillingPage() {
       </section>
 
       <section>
-        <h2 className="mb-3 font-semibold">Histórico</h2>
+        <div className="mb-3 flex items-center justify-between">
+          <h2 className="font-semibold">Histórico</h2>
+          <div className="flex gap-2">
+            {(
+              [
+                ["nfse", "Importar do NFSE"],
+                ["slips", "Importar Boletos"],
+              ] as const
+            ).map(([kind, label]) => (
+              <button
+                key={kind}
+                type="button"
+                disabled={importDocs.isPending}
+                onClick={() => importDocs.mutate(kind)}
+                className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+              >
+                {importDocs.isPending && importDocs.variables === kind
+                  ? "Importando..."
+                  : label}
+              </button>
+            ))}
+          </div>
+        </div>
+        {importDocs.error && (
+          <p className="mb-2 text-sm text-red-600">
+            {(importDocs.error as Error).message}
+          </p>
+        )}
+        {importDocs.data && (
+          <div className="mb-2 text-sm text-slate-600">
+            <p>
+              {importDocs.data.imported} importada(s), {importDocs.data.linked}{" "}
+              associada(s) a faturamento existente, {importDocs.data.duplicates}{" "}
+              já existente(s), {importDocs.data.createdCustomers} cliente(s)
+              cadastrado(s), {importDocs.data.skipped.length} ignorada(s) (sem
+              CNPJ).
+            </p>
+            {importDocs.data.skipped.length > 0 && (
+              <ul className="list-disc pl-5 text-amber-700">
+                {importDocs.data.skipped.map((s) => (
+                  <li key={s.ref}>
+                    {s.ref}: {s.name ?? "-"} ({formatCnpj(s.taxId)})
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
         <div className="overflow-x-auto rounded-lg border border-slate-200 bg-white shadow-sm">
           <Table
             headers={[
@@ -443,24 +494,23 @@ export default function BillingPage() {
                       </div>
                       <div className={actions}>
                         {b.invoice.hasPdf ? (
-                          b.invoice.source === "API" ? (
+                          <>
+                            <ActionLink href={`/api/billings/${b.id}/nfse.pdf`}>
+                              PDF
+                            </ActionLink>
                             <ActionLink
                               href={`/api/billings/${b.id}/nfse.pdf`}
                               download={fileName("nota_fiscal", "pdf", b)}
                             >
-                              Baixar Nota
+                              Baixar
                             </ActionLink>
-                          ) : (
-                            <ActionLink href={`/api/billings/${b.id}/nfse.pdf`}>
-                              PDF
-                            </ActionLink>
-                          )
+                          </>
                         ) : (
                           <ActionButton onClick={() => openUpload(b)}>
                             Anexar PDF
                           </ActionButton>
                         )}
-                        {b.invoice.source === "API" && (
+                        {b.invoice.source !== "MANUAL" && (
                           <ActionLink
                             href={`/api/billings/${b.id}/nfse.xml`}
                             download={fileName("nota_fiscal", "xml", b)}
@@ -498,32 +548,37 @@ export default function BillingPage() {
                 label: "Boleto",
                 field: (b) =>
                   b.bankSlip ? (
-                    <div className={actions}>
-                      <ActionLink href={`/api/billings/${b.id}/boleto.pdf`}>
-                        PDF
-                      </ActionLink>
-                      <ActionLink
-                        href={`/api/billings/${b.id}/boleto.pdf`}
-                        download={fileName("boleto", "pdf", b)}
-                      >
-                        Baixar
-                      </ActionLink>
-                      {b.delivery?.status !== "SENT" && (
-                        <ActionButton
-                          variant="danger"
-                          onClick={() =>
-                            confirm(
-                              `Cancelar o boleto de ${b.customer.name} (${b.competence}) no Banco Inter? Essa ação não pode ser desfeita.` +
-                                (b.invoice
-                                  ? " A NFS-e emitida será mantida no histórico."
-                                  : " O faturamento também será removido do histórico."),
-                            ) && removeSlip.mutateAsync(b.id)
-                          }
+                    <>
+                      <div className="mb-1.5 whitespace-nowrap font-medium">
+                        Venc. {b.dueDate.split("-").reverse().join("/")}
+                      </div>
+                      <div className={actions}>
+                        <ActionLink href={`/api/billings/${b.id}/boleto.pdf`}>
+                          PDF
+                        </ActionLink>
+                        <ActionLink
+                          href={`/api/billings/${b.id}/boleto.pdf`}
+                          download={fileName("boleto", "pdf", b)}
                         >
-                          Excluir
-                        </ActionButton>
-                      )}
-                    </div>
+                          Baixar
+                        </ActionLink>
+                        {b.delivery?.status !== "SENT" && (
+                          <ActionButton
+                            variant="danger"
+                            onClick={() =>
+                              confirm(
+                                `Cancelar o boleto de ${b.customer.name} (${b.competence}) no Banco Inter? Essa ação não pode ser desfeita.` +
+                                  (b.invoice
+                                    ? " A NFS-e emitida será mantida no histórico."
+                                    : " O faturamento também será removido do histórico."),
+                              ) && removeSlip.mutateAsync(b.id)
+                            }
+                          >
+                            Excluir
+                          </ActionButton>
+                        )}
+                      </div>
+                    </>
                   ) : (
                     <span className="text-slate-400">—</span>
                   ),
@@ -551,7 +606,7 @@ export default function BillingPage() {
                   )!.label;
                   return (
                     <>
-                      <div className={actions}>
+                      <div className="mb-1.5">
                         <select
                           className="rounded-md border border-slate-300 px-1.5 py-1 text-xs disabled:opacity-50"
                           value={chosen}
@@ -573,6 +628,8 @@ export default function BillingPage() {
                             </option>
                           ))}
                         </select>
+                      </div>
+                      <div className={actions}>
                         <ActionButton
                           disabled={status === "SENT" || !!missing}
                           title={

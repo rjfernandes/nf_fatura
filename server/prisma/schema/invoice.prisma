@@ -3,9 +3,9 @@ model Invoice {
   billingId String  @unique
   billing   Billing @relation(fields: [billingId], references: [id])
   number    String?
-  accessKey String?
+  accessKey String? @unique
   xml       String?
   pdf       Bytes?
   raw       String?
-  source    String  @default("API") // API | MANUAL
+  source    String  @default("API") // API | MANUAL | IMPORTED
 }

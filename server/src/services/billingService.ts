@@ -256,7 +256,7 @@ export class BillingService {
       where: { billingId },
       include: { billing: { select: { customer: true } } },
     });
-    if (inv?.source === "API" && inv.xml) {
+    if (inv?.source !== "MANUAL" && inv?.xml) {
       const { city, state } = inv.billing.customer;
       return renderDanfse(inv.xml, {
         customerCity: city,

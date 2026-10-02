@@ -2,7 +2,13 @@ import { readFileSync } from "node:fs";
 import { gunzipSync, gzipSync } from "node:zlib";
 import { Agent, request } from "undici";
 import type { Env } from "../../config/env.js";
-import type { NfseProvider, NfseRequest, NfseResult } from "../types.js";
+import type {
+  ImportedNfse,
+  NfseProvider,
+  NfseRequest,
+  NfseResult,
+} from "../types.js";
+import { parseNfse } from "./parseNfse.js";
 import { buildDpsXml, dpsId, type DpsConfig } from "./dps.js";
 import { loadPfx, signDps } from "./sign.js";
 
@@ -138,5 +144,59 @@ export class NfseNacionalProvider implements NfseProvider {
       pdf,
       raw: text,
     };
+  }
+
+  /**
+   * Walks the ADN DF-e distribution by NSU and keeps the NFS-e issued by the
+   * company (the feed also carries notes where it is the taker, and events).
+   */
+  async list(): Promise<ImportedNfse[]> {
+    const { cfg, agent } = this.init();
+    const urls = URLS[this.env.NFSE_ENV];
+    const notes: ImportedNfse[] = [];
+    let nsu = 0;
+    for (;;) {
+      const res = await request(
+        `${urls.adn}/contribuintes/DFe/${nsu}?cnpjConsulta=${cfg.providerCnpj}&lote=true`,
+        {
+          method: "GET",
+          dispatcher: agent,
+          headers: { accept: "application/json" },
+        },
+      );
+      const text = await res.body.text();
+      // 404 is how the portal says there is nothing after this NSU.
+      if (res.statusCode === 404) {
+        break;
+      }
+      if (res.statusCode >= 300) {
+        throw new Error(`NFS-e ${res.statusCode}: ${text.slice(0, 300)}`);
+      }
+      const json = JSON.parse(text) as {
+        LoteDFe?: {
+          NSU: number;
+          TipoDocumento?: string;
+          ArquivoXml?: string;
+        }[];
+      };
+      const batch = json.LoteDFe ?? [];
+      if (!batch.length) {
+        break;
+      }
+      for (const doc of batch) {
+        nsu = Math.max(nsu, doc.NSU);
+        if (doc.TipoDocumento !== "NFSE" || !doc.ArquivoXml) {
+          continue;
+        }
+        const xml = gunzipSync(Buffer.from(doc.ArquivoXml, "base64")).toString(
+          "utf8",
+        );
+        const { providerTaxId, ...note } = parseNfse(xml);
+        if (providerTaxId.toUpperCase() === cfg.providerCnpj) {
+          notes.push(note);
+        }
+      }
+    }
+    return notes;
   }
 }

@@ -6,6 +6,7 @@ import {
 } from "fastify-type-provider-zod";
 import { ZodError } from "zod";
 import { prisma } from "./db.js";
+import { ImportService } from "./services/importService.js";
 import { billingRoutes } from "./routes/billings.js";
 import { customerRoutes } from "./routes/customers.js";
 import { BillingService } from "./services/billingService.js";
@@ -52,6 +53,7 @@ export function buildApp(
       new DeliveryService(prisma, deliveryProviders, (id) =>
         billing.nfsePdf(id),
       ),
+      new ImportService(prisma, nfse, slip),
     ),
   );
   app.register(statementRoutes(statements));

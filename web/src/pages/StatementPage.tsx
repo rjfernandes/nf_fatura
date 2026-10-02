@@ -7,12 +7,10 @@ const input = "mt-1 rounded-md border border-slate-300 px-3 py-2 text-sm";
 const outlineButton =
   "rounded-md border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100";
 
-const today = new Date();
-const currentCompetence = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}`;
-// Default to the last closed month; the current one (partial, up to today) can
-// be picked too.
-const prev = new Date(today.getFullYear(), today.getMonth() - 1, 1);
-const defaultCompetence = `${prev.getFullYear()}-${String(prev.getMonth() + 1).padStart(2, "0")}`;
+const currentMonth = () => {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+};
 
 const signed = (e: StatementEntry) =>
   e.operation === "D" ? -e.amountCents : e.amountCents;
@@ -44,7 +42,7 @@ function downloadCsv(s: Statement) {
 }
 
 export default function StatementPage() {
-  const [competence, setCompetence] = useState(defaultCompetence);
+  const [competence, setCompetence] = useState(currentMonth);
   const fetchStatement = useMutation({ mutationFn: api.statement });
   const s = fetchStatement.data;
 
@@ -58,7 +56,7 @@ export default function StatementPage() {
             <input
               type="month"
               value={competence}
-              max={currentCompetence}
+              max={currentMonth()}
               onChange={(e) => setCompetence(e.target.value)}
               className={`${input} block`}
             />

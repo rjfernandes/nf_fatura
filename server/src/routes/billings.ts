@@ -3,6 +3,7 @@ import type { FastifyPluginAsyncZod } from "fastify-type-provider-zod";
 import { z } from "zod";
 import { prisma } from "../db.js";
 import type { BillingService } from "../services/billingService.js";
+import type { ImportService } from "../services/importService.js";
 import type { DeliveryService } from "../services/deliveryService.js";
 
 const create = z.object({
@@ -21,7 +22,11 @@ const nfseQuery = z.object({
 const MAX_PDF_BYTES = 10 * 1024 * 1024;
 
 export const billingRoutes =
-  (service: BillingService, delivery: DeliveryService): FastifyPluginAsyncZod =>
+  (
+    service: BillingService,
+    delivery: DeliveryService,
+    importer: ImportService,
+  ): FastifyPluginAsyncZod =>
   async (app) => {
     const include = {
       customer: {
@@ -55,7 +60,7 @@ export const billingRoutes =
             OR: [
               { pdf: { not: null } },
               // Issued here: the DANFSe is rendered from the stored XML.
-              { source: "API", xml: { not: null } },
+              { source: { not: "MANUAL" }, xml: { not: null } },
             ],
           },
           select: { billingId: true },
@@ -89,7 +94,7 @@ export const billingRoutes =
     app.get("/billings", async () =>
       withPdfFlag(
         await prisma.billing.findMany({
-          orderBy: { createdAt: "desc" },
+          orderBy: [{ competence: "desc" }, { createdAt: "desc" }],
           include,
           take: 200,
         }),
@@ -99,6 +104,12 @@ export const billingRoutes =
     app.post("/billings", { schema: { body: create } }, async (req, reply) =>
       reply.code(201).send(await service.run(req.body)),
     );
+
+    // Imports the NFS-e already issued by the company from the national portal.
+    app.post("/billings/import-nfse", async () => importer.importFromNfse());
+
+    // Imports the boletos registered at Banco Inter.
+    app.post("/billings/import-slips", async () => importer.importFromSlips());
 
     app.post(
       "/billings/:id/retry",
