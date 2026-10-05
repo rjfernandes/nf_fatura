@@ -105,16 +105,16 @@ export class DeliveryService {
 
     try {
       const check = await provider.alreadySent(b.customer, b.competence, parts);
-      if (check.sent) {
-        await record({
-          status: "SENT",
-          error:
-            `Já constava na ${provider.label}; não reenviado` +
-            (check.detail ? ` (${check.detail})` : ""),
-          response: check.raw,
-        });
-        return;
-      }
+      // if (check.sent) {
+      //   await record({
+      //     status: "SENT",
+      //     error:
+      //       `Já constava na ${provider.label}; não reenviado` +
+      //       (check.detail ? ` (${check.detail})` : ""),
+      //     response: check.raw,
+      //   });
+      //   return;
+      // }
       const r = await provider.send({
         customer: b.customer,
         competence: b.competence,
