@@ -1,4 +1,7 @@
 import { useState, type ReactNode } from "react";
+import { isDesktop } from "../desktop";
+import { alertDialog } from "../dialogs";
+import { documentUrl, openDocument, saveDocument, type DocRef } from "../files";
 
 const variants = {
   primary: "border-indigo-200 text-indigo-700 hover:bg-indigo-50",
@@ -72,19 +75,38 @@ export default function ActionButton({
   );
 }
 
+/**
+ * Opens a document of a billing, or downloads it under `fileName` when
+ * `download` is set.
+ */
 export function ActionLink({
-  href,
-  download,
+  doc,
+  fileName,
+  download = false,
   children,
 }: {
-  href: string;
-  download?: string;
+  doc: DocRef;
+  fileName: string;
+  download?: boolean;
   children: ReactNode;
 }) {
+  if (isDesktop) {
+    return (
+      <ActionButton
+        onClick={() =>
+          (download ? saveDocument : openDocument)(doc, fileName).catch((e) =>
+            alertDialog((e as Error).message),
+          )
+        }
+      >
+        {children}
+      </ActionButton>
+    );
+  }
   return (
     <a
-      href={href}
-      download={download}
+      href={documentUrl(doc)}
+      download={download ? fileName : undefined}
       target={download ? undefined : "_blank"}
       className={`${actionClass} ${variants.primary}`}
     >

@@ -2,7 +2,6 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import {
   api,
-  brl,
   formatCnpj,
   incompleteIntegration,
   type Billing,
@@ -11,8 +10,11 @@ import {
   type Integration,
 } from "../api";
 import ActionButton, { ActionLink } from "../components/ActionButton";
+import MonthInput from "../components/MonthInput";
 import NfseUploadDialog from "../components/NfseUploadDialog";
 import Table from "../components/Table";
+import { alertDialog, confirmDialog } from "../dialogs";
+import { useMoney } from "../hideValues";
 
 const badge: Record<Billing["status"], string> = {
   PENDING: "bg-slate-100 text-slate-700",
@@ -133,6 +135,10 @@ export default function BillingPage() {
   const [dueDate, setDueDate] = useState(defaultDueDate);
   const [mode, setMode] = useState<BillingMode>("AUTO");
   const [uploadFor, setUploadFor] = useState<Billing | null>(null);
+  // "" shows every competence.
+  const [historyCompetence, setHistoryCompetence] =
+    useState(defaultCompetence);
+  const money = useMoney();
 
   // Returned so mutations stay pending until the history has been refetched.
   const refresh = () => qc.invalidateQueries({ queryKey: ["billings"] });
@@ -185,7 +191,7 @@ export default function BillingPage() {
         markRetrying(id, false);
       }
     },
-    onError: (e) => alert((e as Error).message),
+    onError: (e) => alertDialog((e as Error).message),
   });
   const importDocs = useMutation({
     mutationFn: api.importDocuments,
@@ -194,12 +200,12 @@ export default function BillingPage() {
   const removeSlip = useMutation({
     mutationFn: api.deleteSlip,
     onSuccess: refresh,
-    onError: (e) => alert((e as Error).message),
+    onError: (e) => alertDialog((e as Error).message),
   });
   const remove = useMutation({
     mutationFn: api.deleteBilling,
     onSuccess: refresh,
-    onError: (e) => alert((e as Error).message),
+    onError: (e) => alertDialog((e as Error).message),
   });
   const attachNfse = useMutation({
     mutationFn: (v: { id: string; file: File; number: string }) =>
@@ -212,7 +218,7 @@ export default function BillingPage() {
   const removeNfse = useMutation({
     mutationFn: api.deleteNfse,
     onSuccess: refresh,
-    onError: (e) => alert((e as Error).message),
+    onError: (e) => alertDialog((e as Error).message),
   });
   const [partsChoice, setPartsChoice] = useState<Record<string, DeliveryParts>>(
     {},
@@ -222,7 +228,7 @@ export default function BillingPage() {
     onSuccess: refresh,
     onError: (e) => {
       refresh();
-      alert((e as Error).message);
+      alertDialog((e as Error).message);
     },
   });
   const integrationOf = (b: Billing) =>
@@ -252,6 +258,18 @@ export default function BillingPage() {
   const canSubmit =
     selected.size > 0 && (!needsDue || !!dueDate) && !generate.isPending;
 
+  const history = billings.data ?? [];
+  // The current competence is listed even before it has any billing.
+  const historyCompetences = [
+    ...new Set([defaultCompetence, ...history.map((b) => b.competence)]),
+  ]
+    .sort()
+    .reverse();
+  const filteredHistory = historyCompetence
+    ? history.filter((b) => b.competence === historyCompetence)
+    : history;
+  const historyTotal = filteredHistory.reduce((s, b) => s + b.amountCents, 0);
+
   return (
     <div className="space-y-8">
       <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
@@ -259,11 +277,10 @@ export default function BillingPage() {
         <div className="mb-4 flex flex-wrap items-end gap-4">
           <label className="text-sm font-medium text-slate-700">
             Competência
-            <input
-              type="month"
+            <MonthInput
               value={competence}
-              onChange={(e) => setCompetence(e.target.value)}
-              className={`${input} block`}
+              onChange={setCompetence}
+              className={input}
             />
           </label>
           <label className="text-sm font-medium text-slate-700">
@@ -323,7 +340,7 @@ export default function BillingPage() {
             {
               label: "Valor",
               className: "text-right",
-              field: (c) => brl(c.recurringValue),
+              field: (c) => money(c.recurringValue),
             },
             { label: "Boleto", field: (c) => (c.hasBankSlip ? "Sim" : "Não") },
           ]}
@@ -344,7 +361,7 @@ export default function BillingPage() {
               ? `Gerando ${Math.min((progress?.done ?? 0) + 1, progress?.total ?? 1)}/${progress?.total ?? selected.size}...`
               : `${modeOptions.find((o) => o.value === mode)!.button} (${selected.size})`}
           </button>
-          <span className="text-sm text-slate-600">Total: {brl(total)}</span>
+          <span className="text-sm text-slate-600">Total: {money(total)}</span>
           {needsDue && !dueDate && (
             <span className="text-sm text-amber-700">
               Informe o vencimento para os boletos.
@@ -360,7 +377,28 @@ export default function BillingPage() {
 
       <section>
         <div className="mb-3 flex items-center justify-between">
-          <h2 className="font-semibold">Histórico</h2>
+          <div className="flex items-center gap-3">
+            <h2 className="font-semibold">Histórico</h2>
+            <select
+              aria-label="Filtrar por competência"
+              value={historyCompetence}
+              onChange={(e) => setHistoryCompetence(e.target.value)}
+              className="rounded-md border border-slate-300 bg-white px-2 py-1 text-sm"
+            >
+              <option value="">Todas as competências</option>
+              {historyCompetences.map((c) => (
+                <option key={c} value={c}>
+                  {formatCompetence(c)}
+                </option>
+              ))}
+            </select>
+            <span className="text-sm text-slate-600">
+              Total processado:{" "}
+              <span className="font-medium text-slate-800">
+                {money(historyTotal)}
+              </span>
+            </span>
+          </div>
           <div className="flex gap-2">
             {(
               [
@@ -433,7 +471,9 @@ export default function BillingPage() {
                     <span className="block text-xs text-slate-500">
                       {formatCompetence(b.competence)}
                     </span>
-                    <span className="font-medium">{brl(b.amountCents)}</span>
+                    <span className="font-medium">
+                      {money(b.amountCents)}
+                    </span>
                   </>
                 ),
               },
@@ -463,10 +503,10 @@ export default function BillingPage() {
                         {!b.invoice && !b.bankSlip && (
                           <ActionButton
                             variant="danger"
-                            onClick={() =>
-                              confirm(
+                            onClick={async () =>
+                              (await confirmDialog(
                                 `Remover o faturamento de ${b.customer.name} (${b.competence})?`,
-                              ) && remove.mutateAsync(b.id)
+                              )) && remove.mutateAsync(b.id)
                             }
                           >
                             Remover
@@ -495,12 +535,16 @@ export default function BillingPage() {
                       <div className={actions}>
                         {b.invoice.hasPdf ? (
                           <>
-                            <ActionLink href={`/api/billings/${b.id}/nfse.pdf`}>
+                            <ActionLink
+                              doc={{ kind: "nfse_pdf", id: b.id }}
+                              fileName={fileName("nota_fiscal", "pdf", b)}
+                            >
                               PDF
                             </ActionLink>
                             <ActionLink
-                              href={`/api/billings/${b.id}/nfse.pdf`}
-                              download={fileName("nota_fiscal", "pdf", b)}
+                              doc={{ kind: "nfse_pdf", id: b.id }}
+                              fileName={fileName("nota_fiscal", "pdf", b)}
+                              download
                             >
                               Baixar
                             </ActionLink>
@@ -512,8 +556,9 @@ export default function BillingPage() {
                         )}
                         {b.invoice.source !== "MANUAL" && (
                           <ActionLink
-                            href={`/api/billings/${b.id}/nfse.xml`}
-                            download={fileName("nota_fiscal", "xml", b)}
+                            doc={{ kind: "nfse_xml", id: b.id }}
+                            fileName={fileName("nota_fiscal", "xml", b)}
+                            download
                           >
                             XML
                           </ActionLink>
@@ -526,10 +571,10 @@ export default function BillingPage() {
                               </ActionButton>
                               <ActionButton
                                 variant="danger"
-                                onClick={() =>
-                                  confirm(
+                                onClick={async () =>
+                                  (await confirmDialog(
                                     `Remover a NFS-e anexada de ${b.customer.name} (${b.competence})?`,
-                                  ) && removeNfse.mutateAsync(b.id)
+                                  )) && removeNfse.mutateAsync(b.id)
                                 }
                               >
                                 Remover
@@ -553,25 +598,29 @@ export default function BillingPage() {
                         Venc. {b.dueDate.split("-").reverse().join("/")}
                       </div>
                       <div className={actions}>
-                        <ActionLink href={`/api/billings/${b.id}/boleto.pdf`}>
+                        <ActionLink
+                          doc={{ kind: "slip_pdf", id: b.id }}
+                          fileName={fileName("boleto", "pdf", b)}
+                        >
                           PDF
                         </ActionLink>
                         <ActionLink
-                          href={`/api/billings/${b.id}/boleto.pdf`}
-                          download={fileName("boleto", "pdf", b)}
+                          doc={{ kind: "slip_pdf", id: b.id }}
+                          fileName={fileName("boleto", "pdf", b)}
+                          download
                         >
                           Baixar
                         </ActionLink>
                         {b.delivery?.status !== "SENT" && (
                           <ActionButton
                             variant="danger"
-                            onClick={() =>
-                              confirm(
+                            onClick={async () =>
+                              (await confirmDialog(
                                 `Cancelar o boleto de ${b.customer.name} (${b.competence}) no Banco Inter? Essa ação não pode ser desfeita.` +
                                   (b.invoice
                                     ? " A NFS-e emitida será mantida no histórico."
                                     : " O faturamento também será removido do histórico."),
-                              ) && removeSlip.mutateAsync(b.id)
+                              )) && removeSlip.mutateAsync(b.id)
                             }
                           >
                             Excluir
@@ -638,10 +687,10 @@ export default function BillingPage() {
                               : (missing ??
                                 `Enviar para ${integrationLabel(b)}`)
                           }
-                          onClick={() =>
-                            confirm(
+                          onClick={async () =>
+                            (await confirmDialog(
                               `Enviar ${chosenLabel} de ${b.customer.name} (${b.competence}) para ${integrationLabel(b)}?`,
-                            ) && send.mutateAsync({ id: b.id, parts: chosen })
+                            )) && send.mutateAsync({ id: b.id, parts: chosen })
                           }
                         >
                           Enviar
@@ -677,11 +726,15 @@ export default function BillingPage() {
                 },
               },
             ]}
-            rows={billings.data ?? []}
+            rows={filteredHistory}
             rowKey={(b) => b.id}
             rowClassName="align-top"
             cellPadding="px-3 py-2.5"
-            emptyMessage="Nenhum faturamento ainda."
+            emptyMessage={
+              historyCompetence
+                ? "Nenhum faturamento nesta competência."
+                : "Nenhum faturamento ainda."
+            }
           />
         </div>
         <NfseUploadDialog

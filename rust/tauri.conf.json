@@ -1,0 +1,36 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "NF Fatura",
+  "version": "0.1.0",
+  "identifier": "br.com.mrf.nffatura",
+  "build": {
+    "beforeDevCommand": { "script": "npm run dev -w web -- --port 5210 --strictPort", "cwd": ".." },
+    "devUrl": "http://localhost:5210",
+    "beforeBuildCommand": { "script": "npm run build -w web", "cwd": ".." },
+    "frontendDist": "../web/dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "NF Fatura",
+        "width": 1280,
+        "height": 860,
+        "minWidth": 960,
+        "minHeight": 600
+      }
+    ],
+    "security": { "csp": null }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["app", "dmg"],
+    "category": "Finance",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ]
+  }
+}

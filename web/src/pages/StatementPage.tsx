@@ -1,7 +1,12 @@
 import { useMutation } from "@tanstack/react-query";
 import { useState } from "react";
-import { api, brl, type Statement, type StatementEntry } from "../api";
+import { api, type Statement, type StatementEntry } from "../api";
+import MonthInput from "../components/MonthInput";
 import Table from "../components/Table";
+import { isDesktop } from "../desktop";
+import { alertDialog } from "../dialogs";
+import { useMoney } from "../hideValues";
+import { exportStatement, saveText, statementExportUrl } from "../files";
 
 const input = "mt-1 rounded-md border border-slate-300 px-3 py-2 text-sm";
 const outlineButton =
@@ -31,19 +36,17 @@ function downloadCsv(s: Statement) {
       .join(";"),
   );
   const csv = ["Data;Operação;Tipo;Título;Descrição;Valor", ...rows].join("\n");
-  const url = URL.createObjectURL(
-    new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8" }),
+  return saveText(
+    `extrato-${s.competence}.csv`,
+    "\ufeff" + csv,
+    "text/csv;charset=utf-8",
   );
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = `extrato-${s.competence}.csv`;
-  a.click();
-  URL.revokeObjectURL(url);
 }
 
 export default function StatementPage() {
   const [competence, setCompetence] = useState(currentMonth);
   const fetchStatement = useMutation({ mutationFn: api.statement });
+  const money = useMoney();
   const s = fetchStatement.data;
 
   return (
@@ -53,12 +56,11 @@ export default function StatementPage() {
         <div className="flex flex-wrap items-end gap-4">
           <label className="text-sm font-medium text-slate-700">
             Competência
-            <input
-              type="month"
+            <MonthInput
               value={competence}
               max={currentMonth()}
-              onChange={(e) => setCompetence(e.target.value)}
-              className={`${input} block`}
+              onChange={setCompetence}
+              className={input}
             />
           </label>
           <button
@@ -69,15 +71,29 @@ export default function StatementPage() {
             {fetchStatement.isPending ? "Buscando..." : "Buscar extrato"}
           </button>
           {s &&
-            (["pdf", "ofx"] as const).map((format) => (
-              <a
-                key={format}
-                href={`/api/statements/export?competence=${s.competence}&format=${format}`}
-                className={`${outlineButton} uppercase`}
-              >
-                Baixar {format}
-              </a>
-            ))}
+            (["pdf", "ofx"] as const).map((format) =>
+              isDesktop ? (
+                <button
+                  key={format}
+                  onClick={() =>
+                    exportStatement(s.competence, format).catch((e) =>
+                      alertDialog((e as Error).message),
+                    )
+                  }
+                  className={`${outlineButton} uppercase`}
+                >
+                  Baixar {format}
+                </button>
+              ) : (
+                <a
+                  key={format}
+                  href={statementExportUrl(s.competence, format)}
+                  className={`${outlineButton} uppercase`}
+                >
+                  Baixar {format}
+                </a>
+              ),
+            )}
           {s && s.entries.length > 0 && (
             <button onClick={() => downloadCsv(s)} className={outlineButton}>
               Baixar CSV
@@ -105,7 +121,7 @@ export default function StatementPage() {
               >
                 <p className="text-xs uppercase text-slate-500">{label}</p>
                 <p className={`text-xl font-semibold ${color}`}>
-                  {brl(value as number)}
+                  {money(value as number)}
                 </p>
               </div>
             ))}
@@ -137,7 +153,7 @@ export default function StatementPage() {
                         e.operation === "D" ? "text-red-700" : "text-green-700"
                       }
                     >
-                      {brl(signed(e))}
+                      {money(signed(e))}
                     </span>
                   ),
                 },

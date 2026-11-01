@@ -4,7 +4,6 @@ import { useForm } from "react-hook-form";
 import { FiEdit2, FiTrash2 } from "react-icons/fi";
 import {
   api,
-  brl,
   formatCnpj,
   incompleteIntegration,
   type Customer,
@@ -13,6 +12,8 @@ import {
 } from "../api";
 import ActionButton from "../components/ActionButton";
 import Table from "../components/Table";
+import { alertDialog, confirmDialog } from "../dialogs";
+import { useMoney } from "../hideValues";
 import {
   centsToMasked,
   isValidCnpjInput,
@@ -358,6 +359,7 @@ function CustomerForm({
 
 export default function CustomersPage() {
   const qc = useQueryClient();
+  const money = useMoney();
   const { data = [], isLoading } = useQuery({
     queryKey: ["customers"],
     queryFn: api.customers,
@@ -371,7 +373,7 @@ export default function CustomersPage() {
   const remove = useMutation({
     mutationFn: api.deleteCustomer,
     onSuccess: () => qc.invalidateQueries({ queryKey: ["customers"] }),
-    onError: (e: Error) => alert(e.message),
+    onError: (e: Error) => alertDialog(e.message),
   });
   const list = data.filter((c) =>
     (c.name + (c.nickName ?? "") + c.cnpj)
@@ -416,7 +418,7 @@ export default function CustomersPage() {
             {
               label: "Valor",
               className: "text-right",
-              field: (c) => brl(c.recurringValue),
+              field: (c) => money(c.recurringValue),
             },
             { label: "Boleto", field: (c) => (c.hasBankSlip ? "Sim" : "Não") },
             {
@@ -455,8 +457,9 @@ export default function CustomersPage() {
                   <ActionButton
                     variant="danger"
                     title="Excluir"
-                    onClick={() =>
-                      confirm(`Excluir ${c.name}?`) && remove.mutate(c.id)
+                    onClick={async () =>
+                      (await confirmDialog(`Excluir ${c.name}?`)) &&
+                      remove.mutate(c.id)
                     }
                   >
                     <FiTrash2 />

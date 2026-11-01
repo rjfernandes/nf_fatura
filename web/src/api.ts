@@ -1,3 +1,5 @@
+import { desktopApi, isDesktop } from "./desktop";
+
 export interface Customer {
   id: string;
   name: string;
@@ -134,7 +136,7 @@ async function call<T>(
   return data as T;
 }
 
-export const api = {
+const httpApi = {
   customers: () => call<Customer[]>("GET", "/customers"),
   createCustomer: (c: CustomerInput) => call<Customer>("POST", "/customers", c),
   updateCustomer: (id: string, c: CustomerInput) =>
@@ -173,6 +175,11 @@ export const api = {
   sendDelivery: (v: { id: string; parts: DeliveryParts }) =>
     call<Billing>("POST", `/billings/${v.id}/delivery`, { parts: v.parts }),
 };
+
+export type Api = typeof httpApi;
+
+// In the desktop app the Rust backend answers, through commands.
+export const api: Api = isDesktop ? desktopApi : httpApi;
 
 export const brl = (cents: number) =>
   (cents / 100).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
