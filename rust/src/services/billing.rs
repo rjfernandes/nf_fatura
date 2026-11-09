@@ -77,7 +77,9 @@ impl BillingService {
         Self { db, nfse, slip }
     }
 
-    /// Creates one Billing per customer and processes each independently.
+    /// One Billing per customer and competence, processed independently. A
+    /// competence that already has one gets the documents asked for added to
+    /// it; documents that already exist are not issued again.
     pub async fn run(&self, input: &BillingInput) -> Result<Vec<BillingView>> {
         let mode = input.mode.as_deref().unwrap_or("AUTO");
         let ids = self.db.with(|c| {
@@ -87,6 +89,20 @@ impl BillingService {
                     continue;
                 }
                 let (issue_nfse, issue_slip) = resolve_mode(mode, customer.has_bank_slip);
+                if let Some(existing) =
+                    billings::find_for_competence(c, &customer.id, &input.competence, None)?
+                {
+                    let has_slip = billings::ctx(c, &existing.id)?.is_some_and(|b| b.slip.is_some());
+                    billings::set_wanted(
+                        c,
+                        &existing.id,
+                        issue_nfse.then_some(true),
+                        issue_slip.then_some(true),
+                        (issue_slip && !has_slip).then_some(input.due_date.as_str()),
+                    )?;
+                    ids.push(existing.id);
+                    continue;
+                }
                 ids.push(billings::create(
                     c,
                     &NewBilling {
@@ -464,6 +480,29 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn adds_a_later_document_to_the_billing_of_the_same_competence() {
+        let db = Arc::new(Db::in_memory().unwrap());
+        let c = customer(&db, "J", "11222333000181", false);
+        let issued = Arc::new(AtomicUsize::new(0));
+        let i = issued.clone();
+        let svc = BillingService::new(
+            db.clone(),
+            FakeNfse::issuing(move |_| {
+                i.fetch_add(1, SeqCst);
+                Ok(numbered("1"))
+            }),
+            FakeSlip::creating(|_| Ok(slip("a"))),
+        );
+        svc.run(&input(&[&c.id], Some("NFSE"))).await.unwrap();
+        let res = svc.run(&input(&[&c.id], Some("SLIP"))).await.unwrap();
+        assert_eq!(count(&db, "SELECT count(*) FROM Billing"), 1);
+        assert_eq!(issued.load(SeqCst), 1);
+        assert!(res[0].issue_nfse && res[0].issue_slip);
+        assert_eq!(res[0].due_date, "2026-10-10");
+        assert_eq!(count(&db, "SELECT count(*) FROM BankSlip"), 1);
+    }
+
+    #[tokio::test]
     async fn retry_resumes_without_reissuing_the_nfse() {
         let db = Arc::new(Db::in_memory().unwrap());
         let c = customer(&db, "R", "11222333000181", true);
@@ -678,7 +717,11 @@ mod tests {
             400
         );
         fail.store(false, SeqCst);
-        let done = &svc.run(&input(&[&c.id], None)).await.unwrap()[0];
+        let next = BillingInput {
+            competence: "2026-10".into(),
+            ..input(&[&c.id], None)
+        };
+        let done = &svc.run(&next).await.unwrap()[0];
         assert_eq!(svc.remove(&done.id).unwrap_err().status, 409);
         svc.remove(&failed.id).unwrap();
         assert_eq!(svc.remove(&failed.id).unwrap_err().status, 404);

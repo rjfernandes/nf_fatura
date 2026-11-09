@@ -103,7 +103,7 @@ impl NfseNacionalProvider {
         let pfx = std::fs::read(path)
             .map_err(|e| AppError::internal(format!("NFS-e: não foi possível ler {path}: {e}")))?;
         let material = load_pfx(&pfx, password.unwrap_or_default())?;
-        let identity = reqwest::Identity::from_pem(material.identity_pem().as_bytes())
+        let identity = reqwest::Identity::from_pkcs12_der(&pfx, password.unwrap_or_default())
             .map_err(|e| AppError::internal(format!("NFS-e: certificado inválido: {e}")))?;
         let cfg = DpsConfig {
             tp_amb: if s.nfse_env == "producao" { 1 } else { 2 },
@@ -121,12 +121,15 @@ impl NfseNacionalProvider {
             iss_rate_percent: s.nfse_iss_rate_percent,
             tot_trib_sn_percent: Some(s.nfse_tot_trib_sn_percent),
             series: Some(s.nfse_series.clone()),
+            layout_nt009: s.nfse_env != "producao",
             now: None,
         };
         let ctx = Arc::new(Ctx {
             cfg,
+            // SEFIN asks for the client certificate through a TLS renegotiation,
+            // which rustls does not support (the server resets the connection).
             client: reqwest::Client::builder()
-                .use_rustls_tls()
+                .use_native_tls()
                 .identity(identity)
                 .timeout(Duration::from_secs(90))
                 .build()?,

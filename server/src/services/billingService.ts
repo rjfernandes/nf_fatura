@@ -38,23 +38,25 @@ export class BillingService {
     private slip: SlipProvider,
   ) {}
 
-  /** Creates one Billing per customer and processes each independently. */
+  /**
+   * One Billing per customer and competence, processed independently. A
+   * competence that already has one gets the documents asked for added to it;
+   * documents that already exist are not issued again.
+   */
   async run(input: BillingInput) {
     const customers = await this.db.customer.findMany({
       where: { id: { in: input.customerIds } },
     });
     const billings = [];
     for (const c of customers) {
-      const b = await this.db.billing.create({
-        data: {
-          customerId: c.id,
-          competence: input.competence,
-          amountCents: c.recurringValue,
-          dueDate: input.dueDate,
-          ...resolveMode(input.mode ?? "AUTO", c.hasBankSlip),
-        },
-      });
-      billings.push(b.id);
+      billings.push(
+        await this.billingFor(
+          c,
+          input.competence,
+          input.dueDate,
+          resolveMode(input.mode ?? "AUTO", c.hasBankSlip),
+        ),
+      );
     }
     // Sequential to respect API rate limits and keep ordering predictable.
     for (const id of billings) {
@@ -211,43 +213,56 @@ export class BillingService {
     nfse: boolean;
     slip: boolean;
   }) {
-    const existing = await this.db.billing.findFirst({
-      where: { customerId: input.customerId, competence: input.competence },
-      include: { bankSlip: { select: { id: true } } },
+    const c = await this.db.customer.findUniqueOrThrow({
+      where: { id: input.customerId },
     });
-    let id: string;
-    if (existing) {
-      id = existing.id;
-      await this.db.billing.update({
-        where: { id },
-        data: {
-          issueNfse: existing.issueNfse || input.nfse,
-          issueSlip: existing.issueSlip || input.slip,
-          ...(input.slip && !existing.bankSlip && { dueDate: input.dueDate }),
-        },
-      });
-    } else {
-      const c = await this.db.customer.findUniqueOrThrow({
-        where: { id: input.customerId },
-      });
-      id = (
-        await this.db.billing.create({
-          data: {
-            customerId: c.id,
-            competence: input.competence,
-            amountCents: c.recurringValue,
-            dueDate: input.dueDate,
-            issueNfse: input.nfse,
-            issueSlip: input.slip,
-          },
-        })
-      ).id;
-    }
+    const id = await this.billingFor(c, input.competence, input.dueDate, {
+      issueNfse: input.nfse,
+      issueSlip: input.slip,
+    });
     await this.process(id);
     return this.db.billing.findUniqueOrThrow({
       where: { id },
       include: { invoice: { select: { id: true } }, bankSlip: true },
     });
+  }
+
+  /**
+   * The competence's billing with the wanted documents added, or a new one.
+   * Returns its id.
+   */
+  private async billingFor(
+    customer: { id: string; recurringValue: number },
+    competence: string,
+    dueDate: string,
+    wanted: { issueNfse: boolean; issueSlip: boolean },
+  ) {
+    const existing = await this.db.billing.findFirst({
+      where: { customerId: customer.id, competence },
+      orderBy: { createdAt: "asc" },
+      include: { bankSlip: { select: { id: true } } },
+    });
+    if (existing) {
+      await this.db.billing.update({
+        where: { id: existing.id },
+        data: {
+          issueNfse: existing.issueNfse || wanted.issueNfse,
+          issueSlip: existing.issueSlip || wanted.issueSlip,
+          ...(wanted.issueSlip && !existing.bankSlip && { dueDate }),
+        },
+      });
+      return existing.id;
+    }
+    const b = await this.db.billing.create({
+      data: {
+        customerId: customer.id,
+        competence,
+        amountCents: customer.recurringValue,
+        dueDate,
+        ...wanted,
+      },
+    });
+    return b.id;
   }
 
   /** PDF of the NFS-e: rendered from the XML when issued here, else stored. */

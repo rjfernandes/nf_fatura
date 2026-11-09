@@ -26,7 +26,7 @@ const schema = z.object({
   NFSE_ISS_RATE_PERCENT: z.coerce.number().default(0),
   // pTotTribSN (only when opSimpNac≠1)
   NFSE_TOT_TRIB_SN_PERCENT: z.coerce.number().default(6),
-  NFSE_SERIES: z.string().default("70000"),
+  NFSE_SERIES: z.string().default("1"), // 1–49999: range of own applications (API)
   // last nDPS already used in this series
   NFSE_DPS_OFFSET: z.coerce.number().int().nonnegative().default(0),
   COMPANY_PHONE: z.string().optional(),

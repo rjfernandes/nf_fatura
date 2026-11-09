@@ -273,7 +273,13 @@ export default function BillingPage() {
   return (
     <div className="space-y-8">
       <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-        <h2 className="mb-3 font-semibold">Gerar faturas</h2>
+        <h2 className="font-semibold">Gerar faturas</h2>
+        <p className="mb-3 text-sm text-slate-500">
+          A competência é o mês do serviço prestado: é ela que vai para a Camim
+          e para a descrição da NFS-e. A NFS-e em si é emitida com a competência
+          do mês da emissão (ex.: serviço de outubro faturado em novembro → nota
+          com competência de novembro).
+        </p>
         <div className="mb-4 flex flex-wrap items-end gap-4">
           <label className="text-sm font-medium text-slate-700">
             Competência

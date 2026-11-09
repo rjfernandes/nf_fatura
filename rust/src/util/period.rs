@@ -41,6 +41,40 @@ pub fn month_range_until_today(competence: &str, today: NaiveDate) -> Range {
     }
 }
 
+const MONTHS: [&str; 12] = [
+    "Janeiro",
+    "Fevereiro",
+    "Março",
+    "Abril",
+    "Maio",
+    "Junho",
+    "Julho",
+    "Agosto",
+    "Setembro",
+    "Outubro",
+    "Novembro",
+    "Dezembro",
+];
+
+fn month_index(competence: &str, delta: i32) -> i32 {
+    let mut parts = competence.split('-').map(|p| p.parse::<i32>().unwrap_or(0));
+    let y = parts.next().unwrap_or(0);
+    let m = parts.next().unwrap_or(1).clamp(1, 12);
+    y * 12 + (m - 1) + delta
+}
+
+/// The YYYY-MM competence `delta` months away.
+pub fn shift_month(competence: &str, delta: i32) -> String {
+    let i = month_index(competence, delta);
+    format!("{}-{:02}", i.div_euclid(12), i.rem_euclid(12) + 1)
+}
+
+/// "Outubro de 2026" for 2026-10, shifted by `delta` months.
+pub fn month_label(competence: &str, delta: i32) -> String {
+    let i = month_index(competence, delta);
+    format!("{} de {}", MONTHS[i.rem_euclid(12) as usize], i.div_euclid(12))
+}
+
 /// True when the month has not started yet.
 pub fn is_future_month(competence: &str, today: NaiveDate) -> bool {
     month_range(competence).from > iso_day(today)
@@ -75,6 +109,13 @@ mod tests {
 
     fn day(y: i32, m: u32, d: u32) -> NaiveDate {
         NaiveDate::from_ymd_opt(y, m, d).unwrap()
+    }
+
+    #[test]
+    fn shifts_months_across_years() {
+        assert_eq!(shift_month("2026-01", -1), "2025-12");
+        assert_eq!(shift_month("2026-12", 1), "2027-01");
+        assert_eq!(month_label("2026-03", -1), "Fevereiro de 2026");
     }
 
     #[test]

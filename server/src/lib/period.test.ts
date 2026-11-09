@@ -1,7 +1,18 @@
 import { describe, expect, it } from "vitest";
-import { isFutureMonth, monthRange, monthRangeUntilToday } from "./period.js";
+import {
+  isFutureMonth,
+  monthLabel,
+  monthRange,
+  monthRangeUntilToday,
+  shiftMonth,
+} from "./period.js";
 
 describe("period", () => {
+  it("shifts months across years", () => {
+    expect(shiftMonth("2026-01", -1)).toBe("2025-12");
+    expect(shiftMonth("2026-12", 1)).toBe("2027-01");
+    expect(monthLabel("2026-03", -1)).toBe("Fevereiro de 2026");
+  });
   it("computes month ranges, including leap years", () => {
     expect(monthRange("2026-09")).toEqual({
       from: "2026-09-01",

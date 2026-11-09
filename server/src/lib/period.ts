@@ -25,6 +25,34 @@ export function monthRangeUntilToday(
   return { from, to: to > t ? t : to };
 }
 
+const MONTHS = [
+  "Janeiro",
+  "Fevereiro",
+  "Março",
+  "Abril",
+  "Maio",
+  "Junho",
+  "Julho",
+  "Agosto",
+  "Setembro",
+  "Outubro",
+  "Novembro",
+  "Dezembro",
+];
+
+/** The YYYY-MM competence `delta` months away. */
+export function shiftMonth(competence: string, delta: number): string {
+  const [y, m] = competence.split("-").map(Number);
+  const d = new Date(Date.UTC(y, m - 1 + delta, 1));
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
+}
+
+/** "Outubro de 2026" for 2026-10, shifted by `delta` months. */
+export function monthLabel(competence: string, delta = 0): string {
+  const [y, m] = shiftMonth(competence, delta).split("-").map(Number);
+  return `${MONTHS[m - 1]} de ${y}`;
+}
+
 /** True when the month has not started yet. */
 export function isFutureMonth(competence: string, today = new Date()): boolean {
   return monthRange(competence).from > isoDay(today);
