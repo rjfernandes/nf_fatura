@@ -1,6 +1,7 @@
 use super::xml::El;
 use crate::error::{AppError, Result};
 use crate::integrations::types::NfseRequest;
+use crate::util::period::month_label;
 use chrono::{DateTime, Duration, Utc};
 
 pub const NFSE_NS: &str = "http://www.sped.fazenda.gov.br/nfse";
@@ -16,12 +17,15 @@ pub struct DpsConfig {
     pub service_code: String,                   // cTribNac
     pub municipal_service_code: Option<String>, // cTribMun
     pub nbs_code: Option<String>,               // cNBS
-    pub service_description: String,
+    pub service_description: String, // {mes} / {mes_anterior} become the month name
     pub op_simp_nac: String,            // 1 | 2 | 3
     pub reg_ap_trib_sn: Option<String>, // only sent when opSimpNac = 3 (ME/EPP)
     pub iss_rate_percent: f64,
     pub tot_trib_sn_percent: Option<f64>, // pTotTribSN, only sent when opSimpNac ≠ 1
     pub series: Option<String>,
+    // NT 009 v1.01 layout (finNFSe, cNBS before xDescServ): required by produção
+    // restrita since 2026-10-20; produção still takes the previous one.
+    pub layout_nt009: bool,
     pub now: Option<DateTime<Utc>>,
 }
 
@@ -43,6 +47,14 @@ pub fn dps_id(cfg: &DpsConfig, n_dps: i64) -> String {
         cfg.series.as_deref().unwrap_or("1"),
         n_dps
     )
+}
+
+/// Fills {mes} with the competence month and {mes_anterior} with the month
+/// before it ("Outubro de 2026").
+pub fn service_description(template: &str, competence: &str) -> String {
+    template
+        .replace("{mes_anterior}", &month_label(competence, -1))
+        .replace("{mes}", &month_label(competence, 0))
 }
 
 /// Brasília-time ISO timestamp with -03:00 offset.
@@ -92,15 +104,24 @@ pub fn build_dps(cfg: &DpsConfig, req: &NfseRequest) -> Result<El> {
                 .child(El::leaf("xBairro", &c.neighborhood)),
         );
 
+    // Rendered at the provider, as the Emissor Web does (ISS due there).
+    let c_nbs = || filled(&cfg.nbs_code).map(|v| El::leaf("cNBS", v));
+    let mut c_serv = El::new("cServ")
+        .child(El::leaf("cTribNac", &cfg.service_code))
+        .maybe(filled(&cfg.municipal_service_code).map(|v| El::leaf("cTribMun", v)));
+    if cfg.layout_nt009 {
+        c_serv = c_serv.maybe(c_nbs());
+    }
+    c_serv = c_serv.child(El::leaf(
+        "xDescServ",
+        service_description(&cfg.service_description, &req.competence),
+    ));
+    if !cfg.layout_nt009 {
+        c_serv = c_serv.maybe(c_nbs());
+    }
     let serv = El::new("serv")
-        .child(El::new("locPrest").child(El::leaf("cLocPrestacao", toma_mun)))
-        .child(
-            El::new("cServ")
-                .child(El::leaf("cTribNac", &cfg.service_code))
-                .maybe(filled(&cfg.municipal_service_code).map(|v| El::leaf("cTribMun", v)))
-                .child(El::leaf("xDescServ", &cfg.service_description))
-                .maybe(filled(&cfg.nbs_code).map(|v| El::leaf("cNBS", v))),
-        );
+        .child(El::new("locPrest").child(El::leaf("cLocPrestacao", &cfg.provider_city_ibge)))
+        .child(c_serv);
 
     let mut trib_mun = El::new("tribMun").child(El::leaf("tribISSQN", "1"));
     if !simples {
@@ -121,18 +142,22 @@ pub fn build_dps(cfg: &DpsConfig, req: &NfseRequest) -> Result<El> {
         _ => El::leaf("indTotTrib", "0"),
     }));
 
+    // The billing competence is the month of the service; the note's own
+    // competence is the month it is issued (never after dhEmi).
+    let issued = brt_iso(now);
     let inf = El::new("infDPS")
         .attr("Id", dps_id(cfg, req.dps_number))
         .child(El::leaf("tpAmb", cfg.tp_amb.to_string()))
-        .child(El::leaf("dhEmi", brt_iso(now)))
+        .child(El::leaf("dhEmi", &issued))
         .child(El::leaf("verAplic", "nf-fatura-1.0"))
         .child(El::leaf(
             "serie",
             series.parse::<u64>().unwrap_or(1).to_string(),
         ))
         .child(El::leaf("nDPS", req.dps_number.to_string()))
-        .child(El::leaf("dCompet", format!("{}-01", req.competence)))
+        .child(El::leaf("dCompet", format!("{}-01", &issued[..7])))
         .child(El::leaf("tpEmit", "1"))
+        .maybe(cfg.layout_nt009.then(|| El::leaf("finNFSe", "0")))
         .child(El::leaf("cLocEmi", &cfg.provider_city_ibge))
         .child(prest)
         .child(toma)
@@ -230,7 +255,7 @@ pub(crate) mod tests {
         assert!(xml.contains(
             "<opSimpNac>3</opSimpNac><regApTribSN>1</regApTribSN><regEspTrib>0</regEspTrib>"
         ));
-        assert!(xml.contains("<cLocPrestacao>3300803</cLocPrestacao>"));
+        assert!(xml.contains("<cLocPrestacao>3303302</cLocPrestacao>"));
         assert!(xml.contains("<cTribNac>010701</cTribNac><cTribMun>001</cTribMun>"));
         assert!(xml.contains("</xDescServ><cNBS>115013000</cNBS>"));
         assert!(xml.contains(
@@ -238,6 +263,50 @@ pub(crate) mod tests {
         ));
         assert!(xml.contains("<totTrib><pTotTribSN>6.00</pTotTribSN></totTrib>"));
         assert!(!xml.contains("<pAliq>"));
+    }
+
+    #[test]
+    fn follows_the_nt009_layout_when_asked() {
+        let nt009 = DpsConfig {
+            nbs_code: Some("115013000".into()),
+            layout_nt009: true,
+            ..cfg()
+        };
+        let xml = build_dps(&nt009, &req()).unwrap().to_xml();
+        assert!(xml.contains("<tpEmit>1</tpEmit><finNFSe>0</finNFSe><cLocEmi>"));
+        assert!(xml.contains("<cNBS>115013000</cNBS><xDescServ>"));
+        let old = DpsConfig {
+            layout_nt009: false,
+            ..nt009
+        };
+        assert!(!build_dps(&old, &req()).unwrap().to_xml().contains("<finNFSe>"));
+    }
+
+    #[test]
+    fn competes_in_the_month_it_is_issued() {
+        // Service of October, issued on 2026-11-01 00:30 in Brasília.
+        let cfg = DpsConfig {
+            now: Some(Utc.with_ymd_and_hms(2026, 11, 1, 3, 30, 0).unwrap()),
+            ..cfg()
+        };
+        let mut req = req();
+        req.competence = "2026-10".into();
+        let xml = build_dps(&cfg, &req).unwrap().to_xml();
+        assert!(xml.contains("<dCompet>2026-11-01</dCompet>"));
+    }
+
+    #[test]
+    fn fills_the_month_placeholders_of_the_service_description() {
+        let cfg = DpsConfig {
+            service_description: "Serviços de {mes_anterior} (competência {mes})".into(),
+            ..cfg()
+        };
+        let mut req = req();
+        req.competence = "2026-01".into();
+        let xml = build_dps(&cfg, &req).unwrap().to_xml();
+        assert!(xml.contains(
+            "<xDescServ>Serviços de Dezembro de 2025 (competência Janeiro de 2026)</xDescServ>"
+        ));
     }
 
     #[test]

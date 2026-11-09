@@ -4,6 +4,7 @@ use crate::db::Db;
 use crate::error::Result;
 use crate::integrations::types::{ImportedNfse, ImportedSlip, NfseProvider, SlipProvider};
 use crate::util::cnpj::normalize_cnpj;
+use crate::util::period::shift_month;
 use async_trait::async_trait;
 use rusqlite::Connection;
 use serde::Serialize;
@@ -134,7 +135,13 @@ fn attach_invoice(
     n: &ImportedNfse,
     result: &mut ImportResult,
 ) -> Result<()> {
+    if billings::complete_manual_invoice(c, customer_id, &n.number, &n.access_key, &n.xml)? {
+        result.duplicates += 1;
+        return Ok(());
+    }
     let date: String = n.issued_at.chars().take(10).collect();
+    // The note competes in the month it was issued, the one after the service.
+    let competence = shift_month(&n.competence, -1);
     let invoice = NewInvoice {
         number: Some(&n.number),
         access_key: Some(&n.access_key),
@@ -143,7 +150,7 @@ fn attach_invoice(
         ..NewInvoice::default()
     };
     if let Some(existing) =
-        billings::find_for_competence(c, customer_id, &n.competence, Some("Invoice"))?
+        billings::find_for_competence(c, customer_id, &competence, Some("Invoice"))?
     {
         billings::set_wanted(c, &existing.id, Some(true), None, None)?;
         billings::insert_invoice(c, &existing.id, &invoice)?;
@@ -155,7 +162,7 @@ fn attach_invoice(
         c,
         &NewBilling {
             customer_id,
-            competence: &n.competence,
+            competence: &competence,
             amount_cents: n.amount_cents,
             due_date: &date,
             issue_nfse: true,
@@ -174,8 +181,8 @@ fn attach_slip(
     s: &ImportedSlip,
     result: &mut ImportResult,
 ) -> Result<()> {
-    // The due date is the competence.
-    let competence: String = s.due_date.chars().take(7).collect();
+    // The boleto is due in the month after the service.
+    let competence = shift_month(&s.due_date.chars().take(7).collect::<String>(), -1);
     let slip = NewSlip {
         codigo_solicitacao: &s.codigo_solicitacao,
         nosso_numero: s.nosso_numero.as_deref(),
@@ -347,8 +354,8 @@ mod tests {
             access_key: key.into(),
             number: "10".into(),
             xml: "<x/>".into(),
-            issued_at: "2026-09-30T23:50:00-03:00".into(),
-            competence: "2026-09".into(),
+            issued_at: "2026-10-01T11:22:50-03:00".into(),
+            competence: "2026-10".into(),
             taker_tax_id: tax_id.into(),
             taker_name: Some("Acme".into()),
             amount_cents: 5000,
@@ -359,7 +366,7 @@ mod tests {
     fn slip() -> ImportedSlip {
         ImportedSlip {
             codigo_solicitacao: "S1".into(),
-            due_date: "2026-09-10".into(),
+            due_date: "2026-10-03".into(),
             amount_cents: 5000,
             payer: SlipPayer {
                 tax_id: "11.222.333/0001-81".into(),
@@ -407,6 +414,7 @@ mod tests {
             let all = db.with(|c| billings::list(c)).unwrap();
             assert_eq!(all.len(), 1);
             let b = &all[0];
+            // Issued and due in October for the service of September.
             assert_eq!(b.competence, "2026-09");
             assert_eq!(b.status, "COMPLETED");
             assert!(b.issue_nfse && b.issue_slip);
@@ -429,6 +437,46 @@ mod tests {
         assert_eq!((again.duplicates, again.imported), (1, 0));
         let again = svc.import_from_slips().await.unwrap();
         assert_eq!((again.duplicates, again.imported), (1, 0));
+    }
+
+    #[tokio::test]
+    async fn completes_a_note_attached_by_hand_instead_of_duplicating_it() {
+        let db = Arc::new(Db::in_memory().unwrap());
+        let c = crate::testing::customer(&db, "Acme", "11222333000181", true);
+        db.with(|conn| {
+            let id = billings::create(
+                conn,
+                &NewBilling {
+                    customer_id: &c.id,
+                    competence: "2026-09",
+                    amount_cents: 5000,
+                    due_date: "2026-10-03",
+                    issue_nfse: true,
+                    issue_slip: false,
+                    status: "COMPLETED",
+                },
+            )?;
+            billings::insert_invoice(
+                conn,
+                &id,
+                &NewInvoice {
+                    number: Some("10"),
+                    source: "MANUAL",
+                    ..NewInvoice::default()
+                },
+            )
+        })
+        .unwrap();
+        let r = service(&db, vec![note("K1", "11222333000181")], vec![])
+            .import_from_nfse()
+            .await
+            .unwrap();
+        assert_eq!((r.duplicates, r.imported, r.linked), (1, 0, 0));
+        let all = db.with(|c| billings::list(c)).unwrap();
+        assert_eq!(all.len(), 1);
+        assert!(db
+            .with(|c| billings::invoice_exists_with_key(c, "K1"))
+            .unwrap());
     }
 
     #[tokio::test]

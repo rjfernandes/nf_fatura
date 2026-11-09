@@ -159,6 +159,14 @@ export default function SettingsPage() {
       onChange={(e) => set(key, e.target.value as never)}
     />
   );
+  // Same, but an empty value is allowed (the tag is left out of the DPS).
+  const blankable = (key: keyof Settings) => (
+    <input
+      className={input}
+      value={form[key] as string}
+      onChange={(e) => set(key, e.target.value as never)}
+    />
+  );
   const number = (key: keyof Settings, step: string) => (
     <input
       className={input}
@@ -294,9 +302,11 @@ export default function SettingsPage() {
         <Field label="Código de tributação municipal (cTribMun)">
           {required("nfseMunicipalServiceCode")}
         </Field>
-        <Field label="Código NBS (cNBS)">{required("nfseNbsCode")}</Field>
+        <Field label="Código NBS (cNBS), opcional">
+          {blankable("nfseNbsCode")}
+        </Field>
         <Field
-          label="Descrição do serviço"
+          label="Descrição do serviço ({mes} e {mes_anterior} viram o mês por extenso)"
           className="sm:col-span-2 lg:col-span-3"
         >
           {required("nfseServiceDescription")}

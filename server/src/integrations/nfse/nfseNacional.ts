@@ -68,6 +68,7 @@ export class NfseNacionalProvider implements NfseProvider {
       issRatePercent: e.NFSE_ISS_RATE_PERCENT,
       totTribSNPercent: e.NFSE_TOT_TRIB_SN_PERCENT,
       series: e.NFSE_SERIES,
+      layoutNt009: e.NFSE_ENV !== "producao",
     };
     this.ctx = {
       cfg,

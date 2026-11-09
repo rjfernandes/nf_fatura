@@ -404,6 +404,22 @@ pub fn invoice_exists_with_key(c: &Connection, access_key: &str) -> Result<bool>
     )? > 0)
 }
 
+/// Gives an NFS-e attached by hand (number only) the access key and XML of the
+/// same note found later. True when there was one to complete.
+pub fn complete_manual_invoice(
+    c: &Connection,
+    customer_id: &str,
+    number: &str,
+    access_key: &str,
+    xml: &str,
+) -> Result<bool> {
+    Ok(c.execute(
+        "UPDATE Invoice SET accessKey = ?3, xml = ?4 WHERE accessKey IS NULL AND number = ?2 \
+         AND billingId IN (SELECT id FROM Billing WHERE customerId = ?1)",
+        params![customer_id, number, access_key, xml],
+    )? > 0)
+}
+
 pub struct InvoiceDoc {
     pub source: String,
     pub xml: Option<String>,

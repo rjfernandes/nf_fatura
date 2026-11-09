@@ -71,7 +71,7 @@ describe("DPS", () => {
     expect(xml).toContain(
       "<opSimpNac>3</opSimpNac><regApTribSN>1</regApTribSN><regEspTrib>0</regEspTrib>",
     );
-    expect(xml).toContain("<cLocPrestacao>3300803</cLocPrestacao>");
+    expect(xml).toContain("<cLocPrestacao>3303302</cLocPrestacao>");
     expect(xml).toContain(
       "<cTribNac>010701</cTribNac><cTribMun>001</cTribMun>",
     );
@@ -81,6 +81,38 @@ describe("DPS", () => {
     );
     expect(xml).toContain("<totTrib><pTotTribSN>6.00</pTotTribSN></totTrib>");
     expect(xml).not.toContain("<pAliq>");
+  });
+  it("follows the NT 009 layout when asked", () => {
+    const nt009 = { ...cfg, nbsCode: "115013000", layoutNt009: true };
+    expect(buildDpsXml(nt009, req)).toContain(
+      "<tpEmit>1</tpEmit><finNFSe>0</finNFSe><cLocEmi>",
+    );
+    expect(buildDpsXml(nt009, req)).toContain(
+      "<cNBS>115013000</cNBS><xDescServ>",
+    );
+    expect(buildDpsXml({ ...nt009, layoutNt009: false }, req)).not.toContain(
+      "<finNFSe>",
+    );
+  });
+  it("competes in the month it is issued", () => {
+    // Service of October, issued on 2026-11-01 00:30 in Brasília.
+    const xml = buildDpsXml(
+      { ...cfg, now: new Date("2026-11-01T03:30:00Z") },
+      { ...req, competence: "2026-10" },
+    );
+    expect(xml).toContain("<dCompet>2026-11-01</dCompet>");
+  });
+  it("fills the month placeholders of the service description", () => {
+    const xml = buildDpsXml(
+      {
+        ...cfg,
+        serviceDescription: "Serviços de {mes_anterior} (competência {mes})",
+      },
+      { ...req, competence: "2026-01" },
+    );
+    expect(xml).toContain(
+      "<xDescServ>Serviços de Dezembro de 2025 (competência Janeiro de 2026)</xDescServ>",
+    );
   });
   it("requires the customer IBGE code", () => {
     expect(() =>

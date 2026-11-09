@@ -9,15 +9,15 @@ const note: ImportedNfse = {
   accessKey: "K1",
   number: "10",
   xml: "<x/>",
-  issuedAt: "2026-09-30T23:50:00-03:00",
-  competence: "2026-09",
+  issuedAt: "2026-10-01T11:22:50-03:00",
+  competence: "2026-10",
   takerTaxId: "11222333000181",
   takerName: "Acme",
   amountCents: 5000,
 };
 const slip: ImportedSlip = {
   codigoSolicitacao: "S1",
-  dueDate: "2026-09-10",
+  dueDate: "2026-10-03",
   amountCents: 5000,
   payer: { taxId: "11.222.333/0001-81", name: "Acme" },
 };
@@ -58,6 +58,7 @@ describe("ImportService", () => {
         include: { invoice: true, bankSlip: true },
       });
       expect(billings).toHaveLength(1);
+      // Issued and due in October for the service of September.
       expect(billings[0]).toMatchObject({
         competence: "2026-09",
         status: "COMPLETED",
@@ -73,6 +74,42 @@ describe("ImportService", () => {
       });
     },
   );
+
+  it("completes a note attached by hand instead of duplicating it", async () => {
+    await db.customer.create({
+      data: {
+        name: "Acme",
+        cnpj: "11222333000181",
+        address: "Rua A",
+        addressNumber: "1",
+        neighborhood: "Centro",
+        city: "SP",
+        state: "SP",
+        zipcode: "01001000",
+        recurringValue: 5000,
+        billings: {
+          create: {
+            competence: "2026-09",
+            amountCents: 5000,
+            dueDate: "2026-10-03",
+            issueNfse: true,
+            status: "COMPLETED",
+            invoice: { create: { number: "10", source: "MANUAL" } },
+          },
+        },
+      },
+    });
+    expect(await service([note], []).importFromNfse()).toMatchObject({
+      duplicates: 1,
+      imported: 0,
+    });
+    expect(await db.billing.count()).toBe(1);
+    expect(await db.invoice.findFirst()).toMatchObject({
+      accessKey: "K1",
+      xml: "<x/>",
+      source: "MANUAL",
+    });
+  });
 
   it("does not import the same documents twice", async () => {
     const svc = service([note], [slip]);

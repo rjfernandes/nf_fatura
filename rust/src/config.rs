@@ -64,7 +64,7 @@ impl Default for Settings {
             nfse_reg_ap_trib_sn: "1".into(),
             nfse_iss_rate_percent: 0.0,
             nfse_tot_trib_sn_percent: 6.0,
-            nfse_series: "70000".into(),
+            nfse_series: "1".into(), // 1–49999: range of own applications (API)
             nfse_dps_offset: 0,
             inter_env: "sandbox".into(),
             inter_client_id: None,

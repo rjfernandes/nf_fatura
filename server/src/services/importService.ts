@@ -7,6 +7,7 @@ import type {
 } from "../integrations/types.js";
 import { normalizeCnpj } from "../lib/cnpj.js";
 import { cityOf } from "../lib/ibge.js";
+import { shiftMonth } from "../lib/period.js";
 
 type NewCustomer = {
   name: string;
@@ -166,8 +167,18 @@ export class ImportService {
     n: ImportedNfse,
     result: ImportResult,
   ) {
+    // The same note attached by hand (number only) gets its key and XML.
+    const manual = await this.db.invoice.updateMany({
+      where: { accessKey: null, number: n.number, billing: { customerId } },
+      data: { accessKey: n.accessKey, xml: n.xml },
+    });
+    if (manual.count > 0) {
+      result.duplicates++;
+      return;
+    }
     const date = n.issuedAt.slice(0, 10);
-    const competence = n.competence;
+    // The note competes in the month it was issued, the one after the service.
+    const competence = shiftMonth(n.competence, -1);
     const invoice = {
       number: n.number,
       accessKey: n.accessKey,
@@ -253,8 +264,8 @@ export class ImportService {
     s: ImportedSlip,
     result: ImportResult,
   ) {
-    // The due date is the competence.
-    const competence = s.dueDate.slice(0, 7);
+    // The boleto is due in the month after the service.
+    const competence = shiftMonth(s.dueDate.slice(0, 7), -1);
     const bankSlip = {
       codigoSolicitacao: s.codigoSolicitacao,
       nossoNumero: s.nossoNumero,

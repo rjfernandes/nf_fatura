@@ -121,6 +121,40 @@ describe("BillingService", () => {
     },
   );
 
+  it("adds a later document to the billing of the same competence", async () => {
+    const c = await db.customer.create({
+      data: { ...base, name: "J", cnpj: "11222333000181", hasBankSlip: false },
+    });
+    let issued = 0;
+    const svc = new BillingService(
+      db,
+      {
+        list: async () => [],
+        issue: async () => {
+          issued++;
+          return { number: "1", xml: "<x/>" };
+        },
+      },
+      {
+        list: async () => [],
+        create: async () => ({ codigoSolicitacao: "a" }),
+        cancel: async () => {},
+      },
+    );
+    const input = {
+      customerIds: [c.id],
+      competence: "2026-09",
+      dueDate: "2026-10-10",
+    };
+    await svc.run({ ...input, mode: "NFSE" });
+    const [b] = await svc.run({ ...input, mode: "SLIP" });
+    expect(await db.billing.count()).toBe(1);
+    expect(issued).toBe(1);
+    expect(b).toMatchObject({ issueNfse: true, issueSlip: true });
+    expect(b.dueDate).toBe("2026-10-10");
+    expect(b.bankSlip).not.toBeNull();
+  });
+
   it("retry resumes without re-issuing the NFS-e", async () => {
     const c = await db.customer.create({
       data: { ...base, name: "R", cnpj: "11222333000181", hasBankSlip: true },
